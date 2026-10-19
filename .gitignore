@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-electron
+release
+build/icon.iconset
+.idea
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+*.local

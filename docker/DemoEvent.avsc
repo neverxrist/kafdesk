@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "DemoEvent",
+  "namespace": "kafdesk.demo",
+  "fields": [
+    { "name": "id", "type": "string" },
+    { "name": "count", "type": "int" },
+    { "name": "active", "type": "boolean" }
+  ]
+}

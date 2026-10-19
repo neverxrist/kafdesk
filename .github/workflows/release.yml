@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            script: build:mac
+          - os: windows-latest
+            script: build:win
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Signing is opt-in via secrets; without them CI produces unsigned builds.
+      # macOS: CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD, notarize via
+      #        APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+      #        (set package build.mac.notarize=true when enabling)
+      # Windows: CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD
+      - name: Build
+        run: npm run ${{ matrix.script }}
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Do not fail the whole release when no cert is configured
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+
+      # Must be a published (non-draft) release with latest*.yml for electron-updater
+      - name: Upload artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.zip.blockmap
+            release/*.dmg.blockmap
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest*.yml
+          draft: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
