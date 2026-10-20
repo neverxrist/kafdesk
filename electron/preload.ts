@@ -16,6 +16,7 @@ import type {
   SchemaRegistryStatus,
   SchemaSubjectInfo,
   SetGroupOffsetsRequest,
+  StoredCredentialsInfo,
   TailRequest,
   TopicInfo,
   UpdateSettings,
@@ -70,6 +71,10 @@ const api = {
   authLogin: (request: AuthLoginRequest) =>
     ipcRenderer.invoke('auth:login', request) as Promise<AuthSessionPublic>,
   authLogout: () => ipcRenderer.invoke('auth:logout') as Promise<{ ok: boolean }>,
+  storedCredentials: () =>
+    ipcRenderer.invoke('auth:storedCredentials') as Promise<StoredCredentialsInfo>,
+  forgetCredentials: () =>
+    ipcRenderer.invoke('auth:forgetCredentials') as Promise<{ ok: boolean }>,
   checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates') as Promise<UpdateStatus>,
   updateStatus: () => ipcRenderer.invoke('app:updateStatus') as Promise<UpdateStatus>,
   updateSettings: () => ipcRenderer.invoke('app:updateSettings') as Promise<UpdateSettings>,

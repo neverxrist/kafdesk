@@ -50,6 +50,9 @@ export default function App() {
         onUpdateConfig={a.updateConfig}
         onSetAuthMethod={a.setAuthMethod}
         onSsoLogin={a.ssoLogin}
+        onSsoPasswordLogin={a.ssoPasswordLogin}
+        onSsoForgetCredentials={a.ssoForgetCredentials}
+        storedCreds={a.storedCreds}
         onSsoLogout={a.ssoLogout}
         onSaveConnectionDetails={a.saveConnectionDetails}
         onConnect={a.connect}

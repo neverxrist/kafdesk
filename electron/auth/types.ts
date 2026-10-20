@@ -22,6 +22,9 @@ export interface AuthProvider {
   login(input: {
     keycloak?: KeycloakSsoConfig
     oidc?: OidcSsoConfig
+    method?: 'browser' | 'password'
+    username?: string
+    password?: string
   }): Promise<AuthSession>
   refresh?(session: AuthSession, input: {
     keycloak?: KeycloakSsoConfig

@@ -164,6 +164,13 @@ function registerIpc() {
     return { ok: true }
   })
 
+  ipcMain.handle('auth:storedCredentials', async () => authService.storedCredentials())
+
+  ipcMain.handle('auth:forgetCredentials', async () => {
+    authService.forgetCredentials()
+    return { ok: true }
+  })
+
   ipcMain.handle('app:checkForUpdates', async (e) =>
     checkForUpdates(BrowserWindow.fromWebContents(e.sender)),
   )

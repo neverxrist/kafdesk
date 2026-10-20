@@ -7,7 +7,15 @@ import type {
   AuthSessionPublic,
   KeycloakSsoConfig,
   OidcSsoConfig,
+  StoredCredentialsInfo,
 } from '../types'
+import {
+  clearCredentials,
+  getStoredCredentialsInfo,
+  getStoredPassword,
+  normalizeLogin,
+  saveCredentials,
+} from './credentialStore'
 import { keycloakProvider } from './keycloakProvider'
 import type { AuthProvider, AuthSession } from './types'
 
@@ -26,8 +34,9 @@ const providers: AuthProvider[] = [
 ]
 
 class AuthService {
+  /** Session lives in memory only — tokens are never written to disk */
   private session: AuthSession | null = null
-  private lastLogin?: AuthLoginRequest
+  private lastLogin?: Omit<AuthLoginRequest, 'password'>
 
   private storePath(): string {
     return path.join(app.getPath('userData'), 'auth-session.json')
@@ -55,26 +64,35 @@ class AuthService {
     }
   }
 
+  storedCredentials(): StoredCredentialsInfo {
+    return getStoredCredentialsInfo()
+  }
+
+  forgetCredentials(): void {
+    clearCredentials()
+  }
+
+  /** Only non-secret login context survives restarts (never tokens/password) */
   loadFromDisk(): void {
     try {
       const raw = fs.readFileSync(this.storePath(), 'utf8')
-      const parsed = JSON.parse(raw) as { session: AuthSession; lastLogin?: AuthLoginRequest }
-      this.session = parsed.session
+      const parsed = JSON.parse(raw) as { lastLogin?: Omit<AuthLoginRequest, 'password'> }
       this.lastLogin = parsed.lastLogin
     } catch {
-      this.session = null
+      /* ignore */
     }
+    this.session = null
   }
 
-  private persist(): void {
+  private persistContext(): void {
     try {
       fs.writeFileSync(
         this.storePath(),
-        JSON.stringify({ session: this.session, lastLogin: this.lastLogin }, null, 2),
+        JSON.stringify({ lastLogin: this.lastLogin }, null, 2),
         'utf8',
       )
     } catch (err) {
-      console.error('Failed to persist auth session', err)
+      console.error('Failed to persist auth context', err)
     }
   }
 
@@ -84,21 +102,70 @@ class AuthService {
     if (!provider.implemented) {
       throw new Error(`Provider «${provider.label}» ещё не подключён`)
     }
+
+    let password = request.password
+    const username = request.username ? normalizeLogin(request.username) : undefined
+    if (request.method === 'password' && !password && username) {
+      password = getStoredPassword(username) ?? undefined
+    }
+
     this.session = await provider.login({
       keycloak: request.keycloak,
       oidc: request.oidc,
+      method: request.method,
+      username,
+      password,
     })
-    this.lastLogin = request
-    this.persist()
+
+    if (request.method === 'password' && username && password) {
+      if (request.rememberPassword) {
+        try {
+          saveCredentials(username, password)
+        } catch (err) {
+          console.error('Failed to save credentials', err)
+        }
+      } else {
+        clearCredentials()
+      }
+    }
+
+    const { password: _pw, ...context } = request
+    this.lastLogin = { ...context, username }
+    this.persistContext()
     return this.getPublicSession()
   }
 
   async logout(): Promise<void> {
     this.session = null
+    this.lastLogin = undefined
     try {
       fs.unlinkSync(this.storePath())
     } catch {
       /* ignore */
+    }
+  }
+
+  /** Silent re-login with the stored password when refresh is impossible */
+  private async relogin(): Promise<boolean> {
+    const cfg = this.lastLogin
+    if (!cfg?.keycloak) return false
+    const info = getStoredCredentialsInfo()
+    if (!info.username) return false
+    const password = getStoredPassword(info.username)
+    if (!password) return false
+    try {
+      await this.login({
+        providerId: 'keycloak',
+        method: 'password',
+        keycloak: cfg.keycloak,
+        username: info.username,
+        password,
+        rememberPassword: true,
+      })
+      return true
+    } catch (err) {
+      console.error('Silent re-login failed', err)
+      return false
     }
   }
 
@@ -107,27 +174,32 @@ class AuthService {
     keycloak?: KeycloakSsoConfig
     oidc?: OidcSsoConfig
   }): Promise<string | null> {
-    if (!this.session?.accessToken) return null
+    if (!this.session?.accessToken) {
+      // No live session (e.g. after restart) — try stored credentials once
+      if (await this.relogin()) return this.session?.accessToken ?? null
+      return null
+    }
 
     const skew = 30_000
-    const expired =
-      this.session.expiresAt != null && Date.now() > this.session.expiresAt - skew
+    const expired = this.session.expiresAt != null && Date.now() > this.session.expiresAt - skew
 
-    if (expired && this.session.refreshToken) {
+    if (expired) {
       const provider = providers.find((p) => p.id === this.session!.providerId)
       const cfg = sso || this.lastLogin
-      if (provider?.refresh && cfg) {
+      if (this.session.refreshToken && provider?.refresh && cfg) {
         try {
           this.session = await provider.refresh(this.session, {
             keycloak: cfg.keycloak,
             oidc: cfg.oidc,
           })
-          this.persist()
+          return this.session.accessToken
         } catch (err) {
           console.error('Token refresh failed', err)
-          return null
         }
       }
+      // Refresh impossible/failed — silent re-login from keychain password
+      if (await this.relogin()) return this.session?.accessToken ?? null
+      return null
     }
 
     return this.session.accessToken

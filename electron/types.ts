@@ -67,6 +67,16 @@ export interface AuthLoginRequest {
   providerId: AuthProviderId
   keycloak?: KeycloakSsoConfig
   oidc?: OidcSsoConfig
+  /** default: browser PKCE. 'password' = direct grant with login/password */
+  method?: 'browser' | 'password'
+  username?: string
+  password?: string
+  rememberPassword?: boolean
+}
+
+export interface StoredCredentialsInfo {
+  username?: string
+  hasPassword: boolean
 }
 
 export interface TopicInfo {

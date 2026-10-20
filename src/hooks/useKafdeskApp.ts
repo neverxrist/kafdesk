@@ -161,6 +161,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     })
     void window.kafdesk.authSession().then(setAuthSession)
     void window.kafdesk.updateSettings?.().then((s) => setUpdateAuto(s.autoUpdate))
+    void refreshStoredCreds()
     const offTail = window.kafdesk.onTailMessage((msg) => {
       setTailMessages((prev) => [msg, ...prev].slice(0, 200))
     })
@@ -319,26 +320,69 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setPingInfo(`saved «${config.name}»`)
   }
 
-  async function ssoLogin() {
-    if (!config?.sso) return
+  const [storedCreds, setStoredCreds] = useState<{ username?: string; hasPassword: boolean }>({
+    hasPassword: false,
+  })
+
+  async function refreshStoredCreds() {
+    try {
+      if (window.kafdesk.storedCredentials) {
+        setStoredCreds(await window.kafdesk.storedCredentials())
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function runSsoLogin(request: Parameters<typeof window.kafdesk.authLogin>[0]) {
     setBusy(true)
     setError(null)
     try {
-      const session = await window.kafdesk.authLogin({
-        providerId: config.sso.providerId || 'keycloak',
-        keycloak: config.sso.keycloak,
-        oidc: config.sso.oidc,
-      })
+      const session = await window.kafdesk.authLogin(request)
       setAuthSession(session)
       updateConfig({ authMode: 'oauthbearer' })
       setPingInfo(`SSO ok · ${session.username || session.email || 'user'}`)
       pushLog('info', `SSO login ok · ${session.username || session.email || 'user'}`)
+      void refreshStoredCreds()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
       pushLog('error', `SSO login failed: ${msg}`)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function ssoLogin() {
+    if (!config?.sso) return
+    await runSsoLogin({
+      providerId: config.sso.providerId || 'keycloak',
+      method: 'browser',
+      keycloak: config.sso.keycloak,
+      oidc: config.sso.oidc,
+    })
+  }
+
+  async function ssoPasswordLogin(username: string, password: string, remember: boolean) {
+    if (!config?.sso) return
+    await runSsoLogin({
+      providerId: config.sso.providerId || 'keycloak',
+      method: 'password',
+      keycloak: config.sso.keycloak,
+      oidc: config.sso.oidc,
+      username,
+      password: password || undefined,
+      rememberPassword: remember,
+    })
+  }
+
+  async function ssoForgetCredentials() {
+    try {
+      await window.kafdesk.forgetCredentials?.()
+      await refreshStoredCreds()
+      setPingInfo('Stored password forgotten')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -911,6 +955,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     updateConfig,
     setAuthMethod,
     ssoLogin,
+    ssoPasswordLogin,
+    ssoForgetCredentials,
+    storedCreds,
     ssoLogout,
     saveConnectionDetails,
     connect,

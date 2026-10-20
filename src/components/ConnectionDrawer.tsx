@@ -33,6 +33,9 @@ export default function ConnectionDrawer({
   onUpdateConfig,
   onSetAuthMethod,
   onSsoLogin,
+  onSsoPasswordLogin,
+  onSsoForgetCredentials,
+  storedCreds,
   onSsoLogout,
   onSaveConnectionDetails,
   onConnect,
@@ -66,6 +69,9 @@ export default function ConnectionDrawer({
   onUpdateConfig: (patch: Partial<ClusterConfig>) => void
   onSetAuthMethod: (method: AuthMethodUi) => void
   onSsoLogin: () => void
+  onSsoPasswordLogin: (username: string, password: string, remember: boolean) => void
+  onSsoForgetCredentials: () => void
+  storedCreds: { username?: string; hasPassword: boolean }
   onSsoLogout: () => void
   onSaveConnectionDetails: () => void
   onConnect: () => void
@@ -74,6 +80,13 @@ export default function ConnectionDrawer({
 }) {
   const hasSr = Boolean(config.schemaRegistryUrl?.trim())
   const [srOpen, setSrOpen] = useState(false)
+  const [ssoUsername, setSsoUsername] = useState('')
+  const [ssoPassword, setSsoPassword] = useState('')
+  const [rememberPw, setRememberPw] = useState(true)
+
+  useEffect(() => {
+    if (storedCreds.username && !ssoUsername) setSsoUsername(storedCreds.username)
+  }, [storedCreds.username]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Keep panel closed when switching connections; reopen only on demand
@@ -321,14 +334,56 @@ export default function ConnectionDrawer({
                   placeholder="my-app"
                 />
               </div>
+              <div className="field">
+                <label>{tr('ssoUsername')}</label>
+                <input
+                  value={ssoUsername}
+                  onChange={(e) => setSsoUsername(e.target.value)}
+                  autoComplete="username"
+                  placeholder="login"
+                />
+              </div>
+              <div className="field">
+                <label>{tr('ssoPassword')}</label>
+                <input
+                  type="password"
+                  value={ssoPassword}
+                  onChange={(e) => setSsoPassword(e.target.value)}
+                  autoComplete="current-password"
+                  placeholder={storedCreds.hasPassword ? tr('ssoPasswordSaved') : ''}
+                />
+              </div>
+              <label className="settings-toggle" style={{ marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={rememberPw}
+                  onChange={(e) => setRememberPw(e.target.checked)}
+                />
+                <span>{tr('rememberPassword')}</span>
+              </label>
               <div className="actions">
                 {!authSession.loggedIn ? (
-                  <button type="button" disabled={busy} onClick={onSsoLogin}>
-                    {tr('loginKeycloak')}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={busy || !ssoUsername.trim() || (!ssoPassword && !storedCreds.hasPassword)}
+                      onClick={() => onSsoPasswordLogin(ssoUsername, ssoPassword, rememberPw)}
+                    >
+                      {tr('loginWithPassword')}
+                    </button>
+                    <button type="button" disabled={busy} onClick={onSsoLogin}>
+                      {tr('loginBrowser')}
+                    </button>
+                  </>
                 ) : (
                   <button type="button" disabled={busy} onClick={onSsoLogout}>
                     {tr('logoutSso')}
+                  </button>
+                )}
+                {storedCreds.hasPassword && (
+                  <button type="button" disabled={busy} onClick={onSsoForgetCredentials}>
+                    {tr('forgetPassword')}
                   </button>
                 )}
               </div>

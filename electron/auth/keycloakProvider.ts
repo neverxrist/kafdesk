@@ -130,16 +130,50 @@ async function exchangeToken(
   }
 }
 
+async function passwordLogin(
+  cfg: KeycloakSsoConfig,
+  username: string,
+  password: string,
+): Promise<AuthSession> {
+  const base = {
+    grant_type: 'password',
+    client_id: cfg.clientId,
+    username,
+    password,
+  }
+  try {
+    return await exchangeToken(cfg, {
+      ...base,
+      scope: 'openid profile email offline_access',
+    })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    // Some clients reject offline_access — retry with the plain scope set
+    if (msg.includes('invalid_scope')) {
+      return exchangeToken(cfg, { ...base, scope: 'openid profile email' })
+    }
+    throw err
+  }
+}
+
 export const keycloakProvider: AuthProvider = {
   id: 'keycloak',
   label: 'Keycloak',
   implemented: true,
-  description: 'OIDC / PKCE browser login',
+  description: 'OIDC login: password grant or browser PKCE',
 
   async login(input) {
     const cfg = input.keycloak
     if (!cfg?.url?.trim() || !cfg.realm?.trim() || !cfg.clientId?.trim()) {
       throw new Error('Keycloak: укажи URL, realm и clientId')
+    }
+
+    if (input.method === 'password') {
+      const username = (input.username || '').trim()
+      if (!username || !input.password) {
+        throw new Error('Keycloak: укажи логин и пароль')
+      }
+      return passwordLogin(cfg, username, input.password)
     }
 
     const { verifier, challenge } = createPkcePair()
