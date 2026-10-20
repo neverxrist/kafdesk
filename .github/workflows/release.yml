@@ -33,11 +33,13 @@ jobs:
         run: npx vite build
 
       - name: Electron builder (mac arm64 + x64)
-        run: npx electron-builder --mac --arm64 --x64
+        # --publish never: upload is done by softprops below (tag would otherwise
+        # trigger electron-builder GitHub publish and fail / confuse signing)
+        run: npx electron-builder --mac --arm64 --x64 --publish never
         env:
-          # Unsigned until CSC_* / Apple secrets are configured in repo settings
+          # Unsigned until CSC_* / Apple secrets are configured in repo settings.
+          # Do NOT set CSC_LINK to empty — builder treats it as a cert path ("not a file").
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -68,10 +70,9 @@ jobs:
         run: npx vite build
 
       - name: Electron builder (win x64)
-        run: npx electron-builder --win --x64
+        run: npx electron-builder --win --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
         with:
