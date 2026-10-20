@@ -1,6 +1,12 @@
+import { useState } from 'react'
 import type { KafkaMessageView, TopicInfo } from '../../../electron/types'
 import MessageCard from '../MessageCard'
 import type { useLocale } from '../../hooks/useLocale'
+import {
+  loadMessageViewMode,
+  persistMessageViewMode,
+  type MessageViewMode,
+} from '../../lib/messageView'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -39,7 +45,8 @@ export function TailToolbar({
         <label>{tr('searchValue')}</label>
         <input
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          maxLength={255}
+          onChange={(e) => setSearch(e.target.value.slice(0, 255))}
           placeholder={tr('substring')}
           disabled={!selectedTopic}
         />
@@ -48,7 +55,8 @@ export function TailToolbar({
         <label>{tr('searchKey')}</label>
         <input
           value={searchKey}
-          onChange={(e) => setSearchKey(e.target.value)}
+          maxLength={255}
+          onChange={(e) => setSearchKey(e.target.value.slice(0, 255))}
           placeholder={tr('keyContains')}
           disabled={!selectedTopic}
         />
@@ -92,11 +100,38 @@ export default function TailPanel({
   tailMessages: KafkaMessageView[]
   selectedTopic: string | null
 }) {
+  const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
+
+  function setView(mode: MessageViewMode) {
+    setViewMode(mode)
+    persistMessageViewMode(mode)
+  }
+
   return (
     <section className="messages">
       <div className="panel" style={{ marginBottom: '0.9rem' }}>
-        <h2>{tailing ? tr('tailRunning') : tr('tailStopped')}</h2>
-        <div className="status">{tr('tailHint')}</div>
+        <div className="messages-panel-head">
+          <div>
+            <h2 style={{ margin: 0 }}>{tailing ? tr('tailRunning') : tr('tailStopped')}</h2>
+            <div className="status">{tr('tailHint')}</div>
+          </div>
+          <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
+            <button
+              type="button"
+              className={viewMode === 'full' ? 'active' : undefined}
+              onClick={() => setView('full')}
+            >
+              {tr('viewFull')}
+            </button>
+            <button
+              type="button"
+              className={viewMode === 'compact' ? 'active' : undefined}
+              onClick={() => setView('compact')}
+            >
+              {tr('viewCompact')}
+            </button>
+          </div>
+        </div>
       </div>
       {tailMessages.length === 0 && (
         <div className="empty">{selectedTopic ? tr('waitingMessages') : tr('selectTopic')}</div>
@@ -106,12 +141,15 @@ export default function TailPanel({
           key={`${m.partition}-${m.offset}-${i}`}
           message={m}
           keyLabel={tr('msgKey')}
+          viewMode={viewMode}
           labels={{
             republish: '',
             diffSelect: '',
             diffSelected: '',
             expand: tr('expand'),
             collapse: tr('collapse'),
+            copyValue: tr('copyValue'),
+            copied: tr('copied'),
           }}
         />
       ))}

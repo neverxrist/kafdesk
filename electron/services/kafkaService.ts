@@ -1,5 +1,8 @@
 import { Kafka, logLevel, type Admin, type Consumer, type Producer, type KafkaConfig } from 'kafkajs'
 import { SchemaRegistry, SchemaType } from '@kafkajs/confluent-schema-registry'
+import http from 'node:http'
+import https from 'node:https'
+import { URL } from 'node:url'
 import { authService } from '../auth/authService'
 import type {
   ClusterConfig,
@@ -9,6 +12,8 @@ import type {
   GroupOffsetEntry,
   KafkaMessageView,
   PingResult,
+  ProduceBatchRequest,
+  ProduceBatchResult,
   ProduceRequest,
   SchemaRegistryStatus,
   SchemaSubjectInfo,
@@ -22,6 +27,13 @@ import {
   parseJsonLoose,
   toRawPreview,
 } from './messageFormat'
+import { encodeLocalAvro } from './localAvro'
+import { buildSchemaRegistryAgent } from './srTls'
+import { withTimeout } from './withTimeout'
+
+const CONSUME_LIMIT_MAX = 500
+const PRODUCE_TIMEOUT_MS = 45_000
+const SR_ENCODE_TIMEOUT_MS = 20_000
 
 function bearerMiddleware(getToken: () => Promise<string | null>) {
   return () => ({
@@ -96,6 +108,7 @@ export class KafkaService {
 
     if (config.schemaRegistryUrl?.trim()) {
       const useBearer = authMode === 'oauthbearer'
+      const agent = buildSchemaRegistryAgent(config)
       this.registry = new SchemaRegistry({
         host: config.schemaRegistryUrl.replace(/\/$/, ''),
         auth:
@@ -105,6 +118,7 @@ export class KafkaService {
                 password: config.schemaRegistryAuth.password,
               }
             : undefined,
+        agent,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         middlewares: useBearer ? ([bearerMiddleware(() => authService.getAccessToken(config.sso))] as any) : [],
       })
@@ -220,12 +234,9 @@ export class KafkaService {
 
     const started = Date.now()
     try {
-      const res = await fetch(`${url}/subjects`, {
-        headers,
-        signal: AbortSignal.timeout(5_000),
-      })
+      const res = await this.schemaRegistryHttp(`${url}/subjects`, headers)
       const ms = Date.now() - started
-      if (!res.ok) {
+      if (res.status < 200 || res.status >= 300) {
         return { status: 'fail', ms, error: `HTTP ${res.status}` }
       }
       return { status: 'ok', ms }
@@ -236,6 +247,42 @@ export class KafkaService {
         error: err instanceof Error ? err.message : String(err),
       }
     }
+  }
+
+  private schemaRegistryHttp(
+    url: string,
+    headers: Record<string, string>,
+  ): Promise<{ status: number; body: string }> {
+    const agent = buildSchemaRegistryAgent(this.config)
+    return new Promise((resolve, reject) => {
+      const u = new URL(url)
+      const lib = u.protocol === 'https:' ? https : http
+      const req = lib.request(
+        u,
+        {
+          method: 'GET',
+          headers,
+          agent: u.protocol === 'https:' ? agent : undefined,
+          timeout: 10_000,
+        },
+        (res) => {
+          const chunks: Buffer[] = []
+          res.on('data', (c) => chunks.push(c))
+          res.on('end', () =>
+            resolve({
+              status: res.statusCode || 0,
+              body: Buffer.concat(chunks).toString('utf8'),
+            }),
+          )
+        },
+      )
+      req.on('error', reject)
+      req.on('timeout', () => {
+        req.destroy()
+        reject(new Error('Schema Registry request timed out'))
+      })
+      req.end()
+    })
   }
 
   async listTopics(): Promise<TopicInfo[]> {
@@ -308,7 +355,10 @@ export class KafkaService {
     this.ensureAdmin()
     await this.stopConsumer()
 
-    const limit = request.limit ?? 25
+    const limit = Math.min(
+      CONSUME_LIMIT_MAX,
+      Math.max(1, Math.trunc(request.limit ?? 25) || 25),
+    )
     const startFrom =
       request.startFrom ??
       (request.fromBeginning === false ? 'end' : 'beginning')
@@ -391,14 +441,15 @@ export class KafkaService {
         }
       }
     } else if (startFrom === 'end') {
-      // Read a window near the tip instead of waiting at end with no traffic
-      const perPart = Math.max(1, Math.ceil(limit / Math.max(1, targetPartitions.length)))
+      // Latest window: from each partition tip take up to `limit` messages
+      // (not limit/n — that made End ≈ Beginning on small multi-partition topics).
+      // After consume we sort by timestamp and keep global `limit`.
       for (const partition of targetPartitions) {
         const o = highByPart.get(partition)
         if (!o) continue
         const high = Number(o.high)
         const low = Number(o.low)
-        const start = Math.max(low, high - perPart)
+        const start = Math.max(low, high - limit)
         plannedStart.set(partition, start)
         if (start < high) {
           seekPlan.push({ partition, offset: String(start) })
@@ -493,7 +544,9 @@ export class KafkaService {
             }
 
             messages.push(view)
-            if (messages.length >= limit) {
+            // For "end" collect the full tip windows first, then trim by time.
+            // Early stop would bias toward whichever partition delivers first.
+            if (startFrom !== 'end' && messages.length >= limit) {
               done()
               return
             }
@@ -504,15 +557,27 @@ export class KafkaService {
     })
 
     await this.stopConsumer()
-    // eachMessage may race a few extra deliveries before disconnect lands
+    // beginning/offset → oldest first; end → newest first (so Start from is visible)
+    const newestFirst = startFrom === 'end'
     return messages
-      .sort((a, b) => Number(b.offset) - Number(a.offset))
+      .sort((a, b) => {
+        const ta = Number(a.timestamp)
+        const tb = Number(b.timestamp)
+        if (ta !== tb) return newestFirst ? tb - ta : ta - tb
+        if (a.partition !== b.partition) {
+          return newestFirst ? b.partition - a.partition : a.partition - b.partition
+        }
+        const oa = Number(a.offset)
+        const ob = Number(b.offset)
+        return newestFirst ? ob - oa : oa - ob
+      })
       .slice(0, limit)
   }
 
   async startTail(
     request: TailRequest,
     onMessage: (msg: KafkaMessageView) => void,
+    onError?: (message: string) => void,
   ): Promise<void> {
     this.ensureKafka()
     await this.stopConsumer()
@@ -530,15 +595,26 @@ export class KafkaService {
       headerValue: request.searchHeaderValue,
     }
 
-    void this.consumer.run({
-      eachMessage: async ({ topic, partition, message }) => {
-        if (!this.tailing) return
-        if (request.partitions && !request.partitions.includes(partition)) return
-        const view = await this.toMessageView(topic, partition, message)
-        if (!matchesSearch(view, filter)) return
-        this.tailHandler?.(view)
-      },
-    })
+    void this.consumer
+      .run({
+        eachMessage: async ({ topic, partition, message }) => {
+          if (!this.tailing) return
+          if (request.partitions && !request.partitions.includes(partition)) return
+          const view = await this.toMessageView(topic, partition, message)
+          if (!matchesSearch(view, filter)) return
+          this.tailHandler?.(view)
+        },
+      })
+      .catch(async (err) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.tailing = false
+        onError?.(msg)
+        try {
+          await this.stopConsumer()
+        } catch {
+          /* ignore */
+        }
+      })
   }
 
   async stopTail(): Promise<void> {
@@ -679,8 +755,20 @@ export class KafkaService {
       if (!this.registry) throw new Error('Schema Registry is not configured')
       if (!request.subject) throw new Error('Avro subject is required')
       const payload = parseJsonLoose(request.value)
-      schemaId = await this.registry.getLatestSchemaId(request.subject)
-      value = await this.registry.encode(schemaId, payload)
+      schemaId = await withTimeout(
+        this.registry.getLatestSchemaId(request.subject),
+        SR_ENCODE_TIMEOUT_MS,
+        'Schema Registry getLatestSchemaId',
+      )
+      value = await withTimeout(
+        this.registry.encode(schemaId, payload),
+        SR_ENCODE_TIMEOUT_MS,
+        'Schema Registry encode',
+      )
+    } else if (request.format === 'avro-local') {
+      if (!request.localSchema?.trim()) throw new Error('Local .avsc schema is required')
+      schemaId = request.localSchemaId ?? 0
+      value = encodeLocalAvro(request.localSchema, request.value, schemaId)
     } else if (request.format === 'json') {
       // normalize pretty/minified
       const parsed = parseJsonLoose(request.value)
@@ -689,17 +777,21 @@ export class KafkaService {
       value = request.value
     }
 
-    const result = await this.producer!.send({
-      topic: request.topic,
-      messages: [
-        {
-          key: request.key,
-          value,
-          partition: request.partition,
-          headers: request.headers,
-        },
-      ],
-    })
+    const result = await withTimeout(
+      this.producer!.send({
+        topic: request.topic,
+        messages: [
+          {
+            key: request.key,
+            value,
+            partition: request.partition,
+            headers: request.headers,
+          },
+        ],
+      }),
+      PRODUCE_TIMEOUT_MS,
+      'Kafka produce',
+    )
 
     const first = result[0]
     return {
@@ -710,13 +802,102 @@ export class KafkaService {
     }
   }
 
+  async produceBatch(request: ProduceBatchRequest): Promise<ProduceBatchResult> {
+    this.ensureProducer()
+    if (!request.messages.length) {
+      return { sent: 0, format: request.format }
+    }
+    if (request.messages.length > 2000) {
+      throw new Error('Bulk limit is 2000 messages per run')
+    }
+
+    let schemaId: number | undefined
+    const encoded: Array<{ key?: string; value: Buffer | string }> = []
+
+    if (request.format === 'avro') {
+      if (!this.registry) throw new Error('Schema Registry is not configured')
+      if (!request.subject) throw new Error('Avro subject is required')
+      schemaId = await withTimeout(
+        this.registry.getLatestSchemaId(request.subject),
+        SR_ENCODE_TIMEOUT_MS,
+        'Schema Registry getLatestSchemaId',
+      )
+      for (const m of request.messages) {
+        const payload = parseJsonLoose(m.value)
+        encoded.push({
+          key: m.key,
+          value: await withTimeout(
+            this.registry.encode(schemaId, payload),
+            SR_ENCODE_TIMEOUT_MS,
+            'Schema Registry encode',
+          ),
+        })
+      }
+    } else if (request.format === 'avro-local') {
+      if (!request.localSchema?.trim()) throw new Error('Local .avsc schema is required')
+      schemaId = request.localSchemaId ?? 0
+      for (const m of request.messages) {
+        encoded.push({
+          key: m.key,
+          value: encodeLocalAvro(request.localSchema, m.value, schemaId),
+        })
+      }
+    } else if (request.format === 'json') {
+      for (const m of request.messages) {
+        const parsed = parseJsonLoose(m.value)
+        encoded.push({
+          key: m.key,
+          value: typeof parsed === 'string' ? parsed : JSON.stringify(parsed),
+        })
+      }
+    } else {
+      for (const m of request.messages) {
+        encoded.push({ key: m.key, value: m.value })
+      }
+    }
+
+    let lastPartition: number | undefined
+    let lastOffset: string | undefined
+    const chunkSize = 100
+    for (let i = 0; i < encoded.length; i += chunkSize) {
+      const chunk = encoded.slice(i, i + chunkSize)
+      const result = await withTimeout(
+        this.producer!.send({
+          topic: request.topic,
+          messages: chunk.map((m) => ({
+            key: m.key,
+            value: m.value,
+            partition: request.partition,
+          })),
+        }),
+        PRODUCE_TIMEOUT_MS,
+        'Kafka produce batch',
+      )
+      const first = result[0]
+      if (first) {
+        lastPartition = first.partition
+        lastOffset = first.offset
+      }
+    }
+
+    return {
+      sent: encoded.length,
+      format: request.format,
+      schemaId,
+      lastPartition,
+      lastOffset,
+    }
+  }
+
   async listSubjects(): Promise<string[]> {
     this.ensureRegistry()
     const host = this.config!.schemaRegistryUrl!.replace(/\/$/, '')
     const headers = await this.schemaRegistryHeaders()
-    const res = await fetch(`${host}/subjects`, { headers })
-    if (!res.ok) throw new Error(`Schema Registry error: ${res.status}`)
-    return (await res.json()) as string[]
+    const res = await this.schemaRegistryHttp(`${host}/subjects`, headers)
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`Schema Registry error: ${res.status}`)
+    }
+    return JSON.parse(res.body) as string[]
   }
 
   async getLatestSchema(subject: string): Promise<SchemaSubjectInfo> {
@@ -724,11 +905,14 @@ export class KafkaService {
     const host = this.config!.schemaRegistryUrl!.replace(/\/$/, '')
     const headers = await this.schemaRegistryHeaders()
     headers.Accept = 'application/vnd.schemaregistry.v1+json'
-    const res = await fetch(`${host}/subjects/${encodeURIComponent(subject)}/versions/latest`, {
+    const res = await this.schemaRegistryHttp(
+      `${host}/subjects/${encodeURIComponent(subject)}/versions/latest`,
       headers,
-    })
-    if (!res.ok) throw new Error(`Schema Registry error: ${res.status}`)
-    const data = (await res.json()) as {
+    )
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`Schema Registry error: ${res.status}`)
+    }
+    const data = JSON.parse(res.body) as {
       subject: string
       version: number
       id: number

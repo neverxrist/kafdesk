@@ -17,8 +17,8 @@ export function authMethodFromConfig(c: ClusterConfig): AuthMethodUi {
 export function defaultConnection(): ClusterConfig {
   return {
     id: crypto.randomUUID(),
-    name: 'Local',
-    brokers: ['localhost:9092'],
+    name: 'New connection',
+    brokers: [],
     clientId: 'kafdesk',
     ssl: false,
     authMode: 'none',

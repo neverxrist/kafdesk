@@ -175,6 +175,15 @@ export function installMockKafdesk(): void {
       format: req.format,
       schemaId: req.format === 'avro' ? 1 : undefined,
     }),
+    produceBatch: async (req) => ({
+      sent: req.messages.length,
+      format: req.format,
+      schemaId: req.format === 'avro' ? 1 : undefined,
+      lastPartition: 0,
+      lastOffset: String(Date.now() % 10_000),
+    }),
+    pickPemFile: async () => null,
+    pickAvscFile: async () => null,
     listSubjects: async () => subjects,
     getLatestSchema: async (subject) => ({ ...schema, subject }),
     listConsumerGroups: async () => [
@@ -207,6 +216,7 @@ export function installMockKafdesk(): void {
       tailListeners.add(cb)
       return () => tailListeners.delete(cb)
     },
+    onTailError: () => () => undefined,
     listAuthProviders: async () => [],
     authSession: async () => auth,
     authLogin: async (_req: AuthLoginRequest) => auth,

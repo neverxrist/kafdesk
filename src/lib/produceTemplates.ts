@@ -5,7 +5,7 @@ export interface ProduceTemplate {
   name: string
   createdAt: number
   topic: string | null
-  format: 'avro' | 'json' | 'string'
+  format: 'avro' | 'avro-local' | 'json' | 'string'
   subject: string
   key: string
   value: string

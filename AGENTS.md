@@ -34,3 +34,10 @@ npm run dev
 ```
 
 When adding UI, prefer a panel or drawer component over growing `App.tsx`.
+
+## Do not
+
+- Add Docker / local Kafka packs to the repo (`share/`, compose, broker howto).
+- Treat Electron ~100MB installers as a bug — Chromium dominates size; cut deps and buffers instead.
+
+Persistent agent rules: `.cursor/rules/product-constraints.mdc`.

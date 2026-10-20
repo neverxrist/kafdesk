@@ -11,6 +11,8 @@ import type {
   KafkaMessageView,
   LagSummaryResult,
   PingResult,
+  ProduceBatchRequest,
+  ProduceBatchResult,
   ProduceRequest,
   ProduceResult,
   SchemaRegistryStatus,
@@ -42,6 +44,11 @@ const api = {
     ipcRenderer.invoke('kafka:consume', request) as Promise<KafkaMessageView[]>,
   produce: (request: ProduceRequest) =>
     ipcRenderer.invoke('kafka:produce', request) as Promise<ProduceResult>,
+  produceBatch: (request: ProduceBatchRequest) =>
+    ipcRenderer.invoke('kafka:produceBatch', request) as Promise<ProduceBatchResult>,
+  pickPemFile: () => ipcRenderer.invoke('dialog:pickPemFile') as Promise<string | null>,
+  pickAvscFile: () =>
+    ipcRenderer.invoke('dialog:pickAvscFile') as Promise<{ path: string; text: string } | null>,
   listSubjects: () => ipcRenderer.invoke('kafka:listSubjects') as Promise<string[]>,
   getLatestSchema: (subject: string) =>
     ipcRenderer.invoke('kafka:getLatestSchema', subject) as Promise<SchemaSubjectInfo>,
@@ -65,6 +72,13 @@ const api = {
     ipcRenderer.on('kafka:tailMessage', listener)
     return () => {
       ipcRenderer.removeListener('kafka:tailMessage', listener)
+    }
+  },
+  onTailError: (cb: (message: string) => void) => {
+    const listener = (_event: IpcRendererEvent, message: string) => cb(message)
+    ipcRenderer.on('kafka:tailError', listener)
+    return () => {
+      ipcRenderer.removeListener('kafka:tailError', listener)
     }
   },
   listAuthProviders: () =>

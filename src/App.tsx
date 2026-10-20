@@ -1,4 +1,5 @@
 import ConnectionDrawer from './components/ConnectionDrawer'
+import ErrorModal from './components/ErrorModal'
 import TopBar from './components/TopBar'
 import TopicsSidebar from './components/TopicsSidebar'
 import ConsumePanel, { ConsumeToolbar } from './components/panels/ConsumePanel'
@@ -22,6 +23,14 @@ export default function App() {
 
   return (
     <div className={`app ${a.sidebarOpen ? 'drawer-open' : ''}`}>
+      {a.error && (
+        <ErrorModal
+          title={tr('connectErrorTitle')}
+          message={a.error}
+          closeLabel={tr('close')}
+          onClose={a.clearError}
+        />
+      )}
       <ConnectionDrawer
         tr={tr}
         sidebarOpen={a.sidebarOpen}
@@ -50,6 +59,7 @@ export default function App() {
         onSetAuthMethod={a.setAuthMethod}
         onSaveConnectionDetails={a.saveConnectionDetails}
         onConnect={a.connect}
+        onReconnect={a.reconnect}
         onDisconnect={a.disconnect}
         onPing={a.ping}
       />
@@ -71,6 +81,8 @@ export default function App() {
           srStatus={a.srStatus}
           authSession={a.authSession}
           busy={a.busy}
+          onConnect={a.connect}
+          onReconnect={a.reconnect}
         />
 
         <div className="tabs">
@@ -205,6 +217,7 @@ export default function App() {
                 messages={a.messages}
                 selectedTopic={a.selectedTopic}
                 busy={a.loadingMessages}
+                startFrom={a.startFrom}
                 diffMessages={a.diffMessages}
                 onToggleDiff={a.toggleDiffMessage}
                 onClearDiff={a.clearDiff}
@@ -222,13 +235,21 @@ export default function App() {
                 onSubjectChange={a.onSubjectChange}
                 hasRegistry={a.hasRegistry}
                 schemaInfo={a.schemaInfo}
+                localSchemaName={a.localSchemaName}
+                topicDetails={a.topicDetails}
                 produceKey={a.produceKey}
                 setProduceKey={a.setProduceKey}
+                producePartition={a.producePartition}
+                setProducePartition={a.setProducePartition}
                 produceValue={a.produceValue}
                 setProduceValue={a.setProduceValue}
                 busy={a.busy}
                 onSendMessage={a.sendMessage}
+                onBulkSend={a.sendBulk}
+                onGenerateFromSchema={a.generateFromSchema}
+                onLoadAvsc={a.loadAvscFile}
                 produceResult={a.produceResult}
+                error={a.error}
                 templates={a.produceTemplates}
                 onSaveTemplate={a.saveProduceTemplate}
                 onApplyTemplate={a.applyProduceTemplate}

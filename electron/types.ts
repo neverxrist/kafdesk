@@ -43,6 +43,14 @@ export interface ClusterConfig {
     username: string
     password: string
   }
+  /** Optional TLS for Schema Registry HTTPS (paths to PEM files on disk) */
+  schemaRegistryTls?: {
+    caPath?: string
+    certPath?: string
+    keyPath?: string
+    /** default true; set false for lab / self-signed without CA */
+    rejectUnauthorized?: boolean
+  }
   /** SSO settings for this connection (Keycloak now, more later) */
   sso?: ConnectionSsoConfig
 }
@@ -206,12 +214,18 @@ export interface UpdateSettings {
   autoUpdate: boolean
 }
 
+export type ProduceFormat = 'avro' | 'avro-local' | 'json' | 'string'
+
 export interface ProduceRequest {
   topic: string
   key?: string
   value: string
-  format: 'avro' | 'json' | 'string'
+  format: ProduceFormat
   subject?: string
+  /** Required for format === 'avro-local' (.avsc JSON text) */
+  localSchema?: string
+  /** Optional Confluent schema id embedded in wire format (default 0) */
+  localSchemaId?: number
   partition?: number
   headers?: Record<string, string>
 }
@@ -219,8 +233,27 @@ export interface ProduceRequest {
 export interface ProduceResult {
   partition: number
   offset?: string
-  format: 'avro' | 'json' | 'string'
+  format: ProduceFormat
   schemaId?: number
+}
+
+export interface ProduceBatchRequest {
+  topic: string
+  format: ProduceFormat
+  subject?: string
+  localSchema?: string
+  localSchemaId?: number
+  /** Fixed partition for all messages; omit for broker default (key / round-robin) */
+  partition?: number
+  messages: Array<{ key?: string; value: string }>
+}
+
+export interface ProduceBatchResult {
+  sent: number
+  format: ProduceFormat
+  schemaId?: number
+  lastPartition?: number
+  lastOffset?: string
 }
 
 export interface SchemaSubjectInfo {

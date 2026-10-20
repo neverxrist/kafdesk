@@ -22,3 +22,17 @@ export function guessAvroSubject(topic: string, subjects: string[]): string {
   const soft = subjects.find((s) => s.startsWith(topic) || s.includes(topic))
   return soft || ''
 }
+
+/** Topic-related subjects first, then alphabetical */
+export function sortSubjectsForTopic(topic: string | null, subjects: string[]): string[] {
+  if (!topic) return [...subjects].sort()
+  const preferred = [`${topic}-value`, `${topic}-key`, topic]
+  const score = (s: string) => {
+    const i = preferred.indexOf(s)
+    if (i >= 0) return i
+    if (s.startsWith(`${topic}-`) || s.startsWith(topic)) return 10
+    if (s.includes(topic)) return 20
+    return 100
+  }
+  return [...subjects].sort((a, b) => score(a) - score(b) || a.localeCompare(b))
+}

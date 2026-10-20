@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AuthSessionPublic, ClusterConfig, SchemaRegistryStatus } from '../../electron/types'
 import type { Theme } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
+import { ConnectIcon, ReconnectIcon } from './ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -21,6 +22,8 @@ export default function TopBar({
   srStatus,
   authSession,
   busy,
+  onConnect,
+  onReconnect,
 }: {
   tr: Tr
   theme: Theme
@@ -37,6 +40,8 @@ export default function TopBar({
   srStatus: SchemaRegistryStatus
   authSession: AuthSessionPublic
   busy?: boolean
+  onConnect: () => void
+  onReconnect: () => void
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -130,6 +135,29 @@ export default function TopBar({
             </button>
           </div>
         )}
+      </div>
+
+      <div className="topbar-conn-btns">
+        <button
+          type="button"
+          className="topbar-conn-btn icon"
+          disabled={busy || connected}
+          onClick={onConnect}
+          title={tr('connect')}
+          aria-label={tr('connect')}
+        >
+          <ConnectIcon />
+        </button>
+        <button
+          type="button"
+          className="topbar-conn-btn icon"
+          disabled={busy || !connected}
+          onClick={onReconnect}
+          title={tr('reconnect')}
+          aria-label={tr('reconnect')}
+        >
+          <ReconnectIcon />
+        </button>
       </div>
 
       <div className="topbar-controls">

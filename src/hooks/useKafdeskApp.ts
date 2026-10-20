@@ -34,10 +34,16 @@ import {
   persistProduceTemplates,
   type ProduceTemplate,
 } from '../lib/produceTemplates'
+import { mockFromAvroSchemaPretty } from '../lib/avroMock'
+import { expandProduceTemplate } from '../lib/produceVars'
 import { guessAvroSubject, messageBodyText, messageId } from '../lib/messageText'
 import type { AppLogEntry } from './useAppLogs'
 
 export type { SavedConsumeQuery }
+
+function stripIpcError(raw: string): string {
+  return raw.replace(/^Error invoking remote method '[^']+':\s*/i, '').trim() || raw
+}
 
 export interface ConsumeFilterState {
   search: string
@@ -96,12 +102,18 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     'consume',
   )
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
-  const [produceFormat, setProduceFormat] = useState<'avro' | 'json' | 'string'>('json')
+  const [produceFormat, setProduceFormat] = useState<
+    'avro' | 'avro-local' | 'json' | 'string'
+  >('json')
   const [produceKey, setProduceKey] = useState('')
-  const [produceValue, setProduceValue] = useState('{\n  "hello": "world"\n}')
+  /** null = broker auto (key hash / round-robin) */
+  const [producePartition, setProducePartition] = useState<number | null>(null)
+  const [produceValue, setProduceValue] = useState('')
   const [subjects, setSubjects] = useState<string[]>([])
   const [subject, setSubject] = useState('')
   const [schemaInfo, setSchemaInfo] = useState<SchemaSubjectInfo | null>(null)
+  const [localSchema, setLocalSchema] = useState<string | null>(null)
+  const [localSchemaName, setLocalSchemaName] = useState<string | null>(null)
   const [produceResult, setProduceResult] = useState<string | null>(null)
   const [produceTemplates, setProduceTemplates] = useState<ProduceTemplate[]>(() =>
     loadProduceTemplates(),
@@ -187,6 +199,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     const offTail = window.kafdesk.onTailMessage((msg) => {
       setTailMessages((prev) => [msg, ...prev].slice(0, 200))
     })
+    const offTailErr = window.kafdesk.onTailError?.((message) => {
+      setTailing(false)
+      setError(message)
+      pushLog('error', `Tail failed: ${message}`)
+    })
     const offUpdate = window.kafdesk.onUpdateStatus?.((s) => {
       setUpdateStatus(s)
       if (s.state === 'available') pushLog('info', `Update available: ${s.version ?? ''}`)
@@ -195,6 +212,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     })
     return () => {
       offTail()
+      offTailErr?.()
       offUpdate?.()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -571,19 +589,115 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setSidebarOpen(false)
       pushLog('info', `Connected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = stripIpcError(err instanceof Error ? err.message : String(err))
       setError(msg)
-      setConnected(false)
-      setSrStatus('none')
       pushLog('error', `Connect failed: ${msg}`)
+      await abandonConnection()
     } finally {
       setBusy(false)
+    }
+  }
+
+  /** UI says offline → always tear down main-process Kafka session (no ghosts). */
+  async function abandonConnection() {
+    enrichGenRef.current += 1
+    try {
+      if (tailing) {
+        try {
+          await window.kafdesk.tailStop()
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        await window.kafdesk.disconnect()
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setConnected(false)
+      setSrStatus('none')
+      setTopics([])
+      setSubjects([])
+      setTailing(false)
+      setTailMessages([])
+      setSelectedTopic(null)
+      setTopicDetails(null)
+      setTopicLag(null)
+      setMessages([])
+      setGroups([])
+      setSelectedGroup(null)
+      setGroupOffsets([])
     }
   }
 
   async function connect() {
     if (!config) return
     await connectWith(draftConfig())
+  }
+
+  async function reconnect() {
+    if (!config) return
+    const keepTopic = selectedTopic
+    setBusy(true)
+    setError(null)
+    setPingInfo(null)
+    enrichGenRef.current += 1
+    try {
+      if (tailing) {
+        try {
+          await window.kafdesk.tailStop()
+        } catch {
+          /* ignore */
+        }
+        setTailing(false)
+        setTailMessages([])
+      }
+      try {
+        await window.kafdesk.disconnect()
+      } catch {
+        /* ignore stale session */
+      }
+      setConnected(false)
+      setSrStatus('none')
+
+      const target = draftConfig()
+      setConnections((prev) => prev.map((c) => (c.id === target.id ? target : c)))
+      const res = await window.kafdesk.connect(target)
+      setConnected(true)
+      setSrStatus(res.schemaRegistry)
+      if (res.schemaRegistry === 'fail' && res.schemaRegistryError) {
+        setPingInfo(`SR fail: ${res.schemaRegistryError}`)
+      }
+      const list = await window.kafdesk.listTopics()
+      setTopics(list)
+      void enrichTopicApprox(list)
+      if (res.schemaRegistry === 'ok') {
+        try {
+          setSubjects((await window.kafdesk.listSubjects()).sort())
+        } catch {
+          setSubjects([])
+        }
+      } else {
+        setSubjects([])
+      }
+      if (keepTopic && list.some((t) => t.name === keepTopic)) {
+        setSelectedTopic(keepTopic)
+      } else {
+        setSelectedTopic(null)
+        setTopicDetails(null)
+        setTopicLag(null)
+        setMessages([])
+      }
+      pushLog('info', `Reconnected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
+    } catch (err) {
+      const msg = stripIpcError(err instanceof Error ? err.message : String(err))
+      setError(msg)
+      pushLog('error', `Reconnect failed: ${msg}`)
+      await abandonConnection()
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function disconnect() {
@@ -639,9 +753,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         setPingInfo(`${kafkaPart} · ${srPart}`)
         setSrStatus(res.schemaRegistry.status)
         if (!res.kafka.ok) {
-          setConnected(false)
-          setTopics([])
-          setSubjects([])
+          await abandonConnection()
         }
       } else if (res.kafka.ok) {
         // Stay offline — probe only. Make that explicit so "offline" ≠ "unreachable".
@@ -653,12 +765,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
       setPingInfo(`unreachable · ${msg}`)
-      if (wasConnected) {
-        setConnected(false)
-        setTopics([])
-        setSubjects([])
-        setSrStatus('none')
-      }
+      if (wasConnected) await abandonConnection()
     } finally {
       setBusy(false)
     }
@@ -707,6 +814,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   async function selectTopic(name: string) {
     setSelectedTopic(name)
+    setProducePartition(null)
     selectedTopicRef.current = name
     setMessages([])
     setTailMessages([])
@@ -1097,9 +1205,42 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     try {
       const info = await window.kafdesk.getLatestSchema(next)
       setSchemaInfo(info)
-      if (produceFormat === 'avro' && !produceValue.trim()) {
-        setProduceValue('{\n  \n}')
-      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  function schemaForMock(): string | null {
+    if (produceFormat === 'avro-local' && localSchema) return localSchema
+    if (schemaInfo?.schema) return schemaInfo.schema
+    if (localSchema) return localSchema
+    return null
+  }
+
+  function generateFromSchema() {
+    const schema = schemaForMock()
+    if (!schema) {
+      setError('Load an Avro subject or .avsc first')
+      return
+    }
+    try {
+      setProduceValue(mockFromAvroSchemaPretty(schema))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function loadAvscFile() {
+    try {
+      const file = await window.kafdesk.pickAvscFile?.()
+      if (!file) return
+      JSON.parse(file.text)
+      const name = file.path.split(/[/\\]/).pop() || 'local.avsc'
+      setLocalSchema(file.text)
+      setLocalSchemaName(name)
+      setProduceFormat('avro-local')
+      setProduceValue(mockFromAvroSchemaPretty(file.text))
+      pushLog('info', `Loaded local schema ${file.path}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -1107,26 +1248,78 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   async function sendMessage() {
     if (!selectedTopic) return
+    if (produceFormat === 'avro-local' && !localSchema) {
+      setError('Load a .avsc file first')
+      return
+    }
     setBusy(true)
     setError(null)
     setProduceResult(null)
     try {
       const res = await window.kafdesk.produce({
         topic: selectedTopic,
-        key: produceKey || undefined,
-        value: produceValue,
+        key: produceKey ? expandProduceTemplate(produceKey, 0) : undefined,
+        value: expandProduceTemplate(produceValue, 0),
         format: produceFormat,
         subject: produceFormat === 'avro' ? subject || undefined : undefined,
+        localSchema: produceFormat === 'avro-local' ? localSchema || undefined : undefined,
+        partition: producePartition ?? undefined,
       })
       const typeLabel =
-        res.format === 'avro' && res.schemaId != null
+        (res.format === 'avro' || res.format === 'avro-local') && res.schemaId != null
           ? `Avro (schema id ${res.schemaId})`
           : String(res.format).toUpperCase()
       setProduceResult(
         `sent as ${typeLabel} → partition ${res.partition}, offset ${res.offset ?? 'n/a'}`,
       )
+      pushLog('info', `Produce → ${selectedTopic} as ${typeLabel}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
+      pushLog('error', `Produce failed: ${msg}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function sendBulk(count: number) {
+    if (!selectedTopic) return
+    if (produceFormat === 'avro-local' && !localSchema) {
+      setError('Load a .avsc file first')
+      return
+    }
+    const n = Math.min(2000, Math.max(1, Math.trunc(count)))
+    setBusy(true)
+    setError(null)
+    setProduceResult(null)
+    try {
+      const messages = Array.from({ length: n }, (_, i) => ({
+        key: produceKey ? expandProduceTemplate(produceKey, i) : undefined,
+        value: expandProduceTemplate(produceValue, i),
+      }))
+      const res = await window.kafdesk.produceBatch({
+        topic: selectedTopic,
+        format: produceFormat,
+        subject: produceFormat === 'avro' ? subject || undefined : undefined,
+        localSchema: produceFormat === 'avro-local' ? localSchema || undefined : undefined,
+        partition: producePartition ?? undefined,
+        messages,
+      })
+      const typeLabel =
+        (res.format === 'avro' || res.format === 'avro-local') && res.schemaId != null
+          ? `Avro (schema id ${res.schemaId})`
+          : String(res.format).toUpperCase()
+      setProduceResult(
+        `sent ${res.sent} as ${typeLabel}` +
+          (res.lastPartition != null
+            ? ` → last p${res.lastPartition} offset ${res.lastOffset ?? 'n/a'}`
+            : ''),
+      )
+      pushLog('info', `Bulk produce ${res.sent} → ${selectedTopic}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
+      pushLog('error', `Bulk produce failed: ${msg}`)
     } finally {
       setBusy(false)
     }
@@ -1194,11 +1387,14 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     hasRegistry,
     produceFormat,
     setProduceFormat,
+    localSchemaName,
     subjects,
     subject,
     schemaInfo,
     produceKey,
     setProduceKey,
+    producePartition,
+    setProducePartition,
     produceValue,
     setProduceValue,
     produceResult,
@@ -1240,7 +1436,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     ssoLogout,
     saveConnectionDetails,
     connect,
+    reconnect,
     disconnect,
+    clearError: () => setError(null),
     ping,
     selectTopic,
     loadMessages,
@@ -1252,5 +1450,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     stopTail,
     onSubjectChange,
     sendMessage,
+    sendBulk,
+    generateFromSchema,
+    loadAvscFile,
   }
 }

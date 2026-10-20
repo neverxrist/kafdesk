@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +16,7 @@ import type {
   AuthLoginRequest,
   ClusterConfig,
   ConsumeRequest,
+  ProduceBatchRequest,
   ProduceRequest,
   SetGroupOffsetsRequest,
   TailRequest,
@@ -112,6 +113,40 @@ function registerIpc() {
     kafkaService.produce(request),
   )
 
+  ipcMain.handle('kafka:produceBatch', async (_e, request: ProduceBatchRequest) =>
+    kafkaService.produceBatch(request),
+  )
+
+  ipcMain.handle('dialog:pickPemFile', async () => {
+    const opts: Electron.OpenDialogOptions = {
+      title: 'Select PEM / certificate file',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Certificates', extensions: ['pem', 'crt', 'cer', 'key', 'pub'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    }
+    const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+    if (res.canceled || !res.filePaths[0]) return null
+    return res.filePaths[0]
+  })
+
+  ipcMain.handle('dialog:pickAvscFile', async () => {
+    const opts: Electron.OpenDialogOptions = {
+      title: 'Select Avro schema (.avsc)',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Avro schema', extensions: ['avsc', 'json'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    }
+    const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+    if (res.canceled || !res.filePaths[0]) return null
+    const filePath = res.filePaths[0]
+    const text = fs.readFileSync(filePath, 'utf8')
+    return { path: filePath, text }
+  })
+
   ipcMain.handle('kafka:listSubjects', async () => kafkaService.listSubjects())
 
   ipcMain.handle('kafka:getLatestSchema', async (_e, subject: string) =>
@@ -142,9 +177,15 @@ function registerIpc() {
   )
 
   ipcMain.handle('kafka:tailStart', async (e, request: TailRequest) => {
-    await kafkaService.startTail(request, (msg) => {
-      e.sender.send('kafka:tailMessage', msg)
-    })
+    await kafkaService.startTail(
+      request,
+      (msg) => {
+        e.sender.send('kafka:tailMessage', msg)
+      },
+      (errMsg) => {
+        e.sender.send('kafka:tailError', errMsg)
+      },
+    )
     return { ok: true }
   })
 

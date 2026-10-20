@@ -5,8 +5,17 @@ import MessageDiffPanel from '../MessageDiffPanel'
 import type { useLocale } from '../../hooks/useLocale'
 import type { SavedConsumeQuery } from '../../lib/savedQueries'
 import { messageId } from '../../lib/messageText'
+import {
+  loadGroupByPartitions,
+  loadMessageViewMode,
+  persistGroupByPartitions,
+  persistMessageViewMode,
+  type MessageViewMode,
+} from '../../lib/messageView'
 
 type Tr = ReturnType<typeof useLocale>['tr']
+
+const FILTER_MAX = 255
 
 export function ConsumeToolbar({
   tr,
@@ -101,7 +110,8 @@ export function ConsumeToolbar({
           <label>{tr('searchValue')}</label>
           <input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            maxLength={FILTER_MAX}
+            onChange={(e) => setSearch(e.target.value.slice(0, FILTER_MAX))}
             placeholder={tr('substring')}
             disabled={!selectedTopic}
           />
@@ -110,7 +120,8 @@ export function ConsumeToolbar({
           <label>{tr('searchKey')}</label>
           <input
             value={searchKey}
-            onChange={(e) => setSearchKey(e.target.value)}
+            maxLength={FILTER_MAX}
+            onChange={(e) => setSearchKey(e.target.value.slice(0, FILTER_MAX))}
             placeholder={tr('keyContains')}
             disabled={!selectedTopic}
           />
@@ -199,7 +210,8 @@ export function ConsumeToolbar({
           <label>{tr('headerKey')}</label>
           <input
             value={headerKey}
-            onChange={(e) => setHeaderKey(e.target.value)}
+            maxLength={FILTER_MAX}
+            onChange={(e) => setHeaderKey(e.target.value.slice(0, FILTER_MAX))}
             placeholder={tr('headerKeyPh')}
             disabled={!selectedTopic}
           />
@@ -208,7 +220,8 @@ export function ConsumeToolbar({
           <label>{tr('headerValue')}</label>
           <input
             value={headerValue}
-            onChange={(e) => setHeaderValue(e.target.value)}
+            maxLength={FILTER_MAX}
+            onChange={(e) => setHeaderValue(e.target.value.slice(0, FILTER_MAX))}
             placeholder={tr('headerValuePh')}
             disabled={!selectedTopic}
           />
@@ -295,7 +308,10 @@ export function ConsumeToolbar({
   )
 }
 
-function groupByPartition(messages: KafkaMessageView[]): Array<{
+function groupByPartition(
+  messages: KafkaMessageView[],
+  newestFirst: boolean,
+): Array<{
   partition: number
   messages: KafkaMessageView[]
 }> {
@@ -309,7 +325,11 @@ function groupByPartition(messages: KafkaMessageView[]): Array<{
     .sort((a, b) => a[0] - b[0])
     .map(([partition, msgs]) => ({
       partition,
-      messages: [...msgs].sort((a, b) => Number(b.offset) - Number(a.offset)),
+      messages: [...msgs].sort((a, b) => {
+        const oa = Number(a.offset)
+        const ob = Number(b.offset)
+        return newestFirst ? ob - oa : oa - ob
+      }),
     }))
 }
 
@@ -320,6 +340,7 @@ export default function ConsumePanel({
   messages,
   selectedTopic,
   busy,
+  startFrom = 'end',
   diffMessages,
   onToggleDiff,
   onClearDiff,
@@ -331,51 +352,157 @@ export default function ConsumePanel({
   messages: KafkaMessageView[]
   selectedTopic: string | null
   busy?: boolean
+  startFrom?: ConsumeStartFrom
   diffMessages: KafkaMessageView[]
   onToggleDiff: (m: KafkaMessageView) => void
   onClearDiff: () => void
   onRepublish: (m: KafkaMessageView) => void
 }) {
-  const byPartition = useMemo(() => groupByPartition(messages), [messages])
+  const [hiddenPartitions, setHiddenPartitions] = useState<Set<number>>(() => new Set())
+  const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
+  const [groupByPartitions, setGroupByPartitions] = useState(() => loadGroupByPartitions())
+  const newestFirst = startFrom === 'end'
+
+  function setView(mode: MessageViewMode) {
+    setViewMode(mode)
+    persistMessageViewMode(mode)
+  }
+
+  function setGroupBy(on: boolean) {
+    setGroupByPartitions(on)
+    persistGroupByPartitions(on)
+  }
+
+  const byPartition = useMemo(
+    () => groupByPartition(messages, newestFirst),
+    [messages, newestFirst],
+  )
+  const visiblePartitions = useMemo(
+    () => byPartition.filter((g) => !hiddenPartitions.has(g.partition)),
+    [byPartition, hiddenPartitions],
+  )
+  const flatMessages = useMemo(
+    () => messages.filter((m) => !hiddenPartitions.has(m.partition)),
+    [messages, hiddenPartitions],
+  )
   const diffIds = useMemo(() => new Set(diffMessages.map(messageId)), [diffMessages])
   const diffFull = diffMessages.length >= 2
+
+  useEffect(() => {
+    setHiddenPartitions(new Set())
+  }, [selectedTopic])
+
+  function togglePartition(id: number) {
+    setHiddenPartitions((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function renderCard(m: KafkaMessageView) {
+    return (
+      <MessageCard
+        key={`${m.partition}-${m.offset}`}
+        message={m}
+        keyLabel={tr('msgKey')}
+        viewMode={viewMode}
+        selectedForDiff={diffIds.has(messageId(m))}
+        diffFull={diffFull}
+        onToggleDiff={viewMode === 'full' ? onToggleDiff : undefined}
+        onRepublish={viewMode === 'full' ? onRepublish : undefined}
+        labels={{
+          republish: tr('republish'),
+          diffSelect: tr('diffSelect'),
+          diffSelected: tr('diffSelected'),
+          expand: tr('expand'),
+          collapse: tr('collapse'),
+          copyValue: tr('copyValue'),
+          copied: tr('copied'),
+        }}
+      />
+    )
+  }
 
   return (
     <section className="messages">
       {topicDetails && (
         <div className="panel" style={{ marginBottom: '0.9rem' }}>
-          <h2>
-            {topicDetails.name}
-            {topicDetails.approxMessages != null && (
-              <span className="topic-meta">
-                {' '}
-                · {tr('msgsApprox', { n: topicDetails.approxMessages })}
-              </span>
-            )}
-            {topicLag != null && (
-              <span className="topic-meta topic-lag">
-                {' '}
-                · {tr('topicLag', { n: topicLag })}
-              </span>
-            )}
-          </h2>
-          <div className="partitions">
-            {topicDetails.partitions.map((p) => (
-              <span key={p.partitionId} className="chip partition-chip">
-                <strong>
-                  {tr('partitionMsgs', {
-                    id: p.partitionId,
-                    n: p.approxMessages ?? '?',
-                  })}
-                </strong>
-                <span className="partition-offsets">
-                  {tr('partitionOffsets', {
-                    low: p.offsetLow ?? '?',
-                    high: p.offsetHigh ?? '?',
-                  })}
+          <div className="messages-panel-head">
+            <h2>
+              {topicDetails.name}
+              {topicDetails.approxMessages != null && (
+                <span className="topic-meta">
+                  {' '}
+                  · {tr('msgsApprox', { n: topicDetails.approxMessages })}
                 </span>
-              </span>
-            ))}
+              )}
+              {topicLag != null && (
+                <span className="topic-meta topic-lag">
+                  {' '}
+                  · {tr('topicLag', { n: topicLag })}
+                </span>
+              )}
+            </h2>
+            <div className="messages-panel-controls">
+              <label className="message-group-opt">
+                <input
+                  type="checkbox"
+                  checked={groupByPartitions}
+                  onChange={(e) => setGroupBy(e.target.checked)}
+                />
+                {tr('groupByPartitions')}
+              </label>
+              <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
+                <button
+                  type="button"
+                  className={viewMode === 'full' ? 'active' : undefined}
+                  onClick={() => setView('full')}
+                >
+                  {tr('viewFull')}
+                </button>
+                <button
+                  type="button"
+                  className={viewMode === 'compact' ? 'active' : undefined}
+                  onClick={() => setView('compact')}
+                >
+                  {tr('viewCompact')}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="partitions">
+            {topicDetails.partitions.map((p) => {
+              const hidden = hiddenPartitions.has(p.partitionId)
+              return (
+                <button
+                  key={p.partitionId}
+                  type="button"
+                  className={`chip partition-chip${hidden ? ' muted' : ' active'}`}
+                  title={
+                    hidden
+                      ? tr('partitionFilterOff')
+                      : tr('partitionFilterOn', { id: p.partitionId })
+                  }
+                  aria-pressed={!hidden}
+                  onClick={() => togglePartition(p.partitionId)}
+                >
+                  <strong>
+                    {tr('partitionMsgs', {
+                      id: p.partitionId,
+                      n: p.approxMessages ?? '?',
+                    })}
+                  </strong>
+                  <span className="partition-offsets">
+                    {tr('partitionOffsets', {
+                      low: p.offsetLow ?? '?',
+                      high: p.offsetHigh ?? '?',
+                    })}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
@@ -407,31 +534,16 @@ export default function ConsumePanel({
         </div>
       )}
 
-      {byPartition.map(({ partition, messages: partMsgs }) => (
-        <div key={partition} className="partition-group">
-          <div className="partition-group-head">
-            {tr('loadedInPartition', { id: partition, n: partMsgs.length })}
-          </div>
-          {partMsgs.map((m) => (
-            <MessageCard
-              key={`${m.partition}-${m.offset}`}
-              message={m}
-              keyLabel={tr('msgKey')}
-              selectedForDiff={diffIds.has(messageId(m))}
-              diffFull={diffFull}
-              onToggleDiff={onToggleDiff}
-              onRepublish={onRepublish}
-              labels={{
-                republish: tr('republish'),
-                diffSelect: tr('diffSelect'),
-                diffSelected: tr('diffSelected'),
-                expand: tr('expand'),
-                collapse: tr('collapse'),
-              }}
-            />
-          ))}
-        </div>
-      ))}
+      {groupByPartitions
+        ? visiblePartitions.map(({ partition, messages: partMsgs }) => (
+            <div key={partition} className="partition-group">
+              <div className="partition-group-head">
+                {tr('loadedInPartition', { id: partition, n: partMsgs.length })}
+              </div>
+              {partMsgs.map(renderCard)}
+            </div>
+          ))
+        : flatMessages.map(renderCard)}
     </section>
   )
 }

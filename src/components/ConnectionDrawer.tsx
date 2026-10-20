@@ -3,6 +3,7 @@ import type { ClusterConfig, SchemaRegistryStatus } from '../../electron/types'
 import type { AuthMethodUi } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
 import PasswordInput from './PasswordInput'
+import { ConnectIcon, DelIcon, DupIcon, EditIcon, ReconnectIcon } from './ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -34,6 +35,7 @@ export default function ConnectionDrawer({
   onSetAuthMethod,
   onSaveConnectionDetails,
   onConnect,
+  onReconnect,
   onDisconnect,
   onPing,
 }: {
@@ -64,16 +66,45 @@ export default function ConnectionDrawer({
   onSetAuthMethod: (method: AuthMethodUi) => void
   onSaveConnectionDetails: () => void
   onConnect: () => void
+  onReconnect: () => void
   onDisconnect: () => void
   onPing: () => void
 }) {
   const hasSr = Boolean(config.schemaRegistryUrl?.trim())
   const [srOpen, setSrOpen] = useState(false)
 
+  const nameOk = Boolean(config.name?.trim())
+  const brokersOk = Boolean(brokersText.trim())
+  const saslUserOk = authMethod !== 'sasl' || Boolean(config.sasl?.username?.trim())
+  const saslPassOk = authMethod !== 'sasl' || Boolean(config.sasl?.password)
+  // URL is required once the SR panel is open or a URL was already saved
+  const srUrlNeeded = srOpen || hasSr
+  const srUrlOk = !srUrlNeeded || Boolean(config.schemaRegistryUrl?.trim())
+
+  const srMeta =
+    srStatus === 'ok'
+      ? tr('srToggleOn')
+      : srStatus === 'fail' && hasSr
+        ? tr('srToggleFail')
+        : hasSr
+          ? tr('srToggleUrlSet')
+          : tr('srToggleOff')
+
   useEffect(() => {
     // Keep panel closed when switching connections; reopen only on demand
     setSrOpen(false)
   }, [config.id])
+
+  function reqLabel(text: string, ok: boolean) {
+    return (
+      <label className={ok ? undefined : 'label-required'}>
+        {text}
+        <span className="req-star" title={tr('requiredMark')}>
+          *
+        </span>
+      </label>
+    )
+  }
 
   return (
     <>
@@ -126,39 +157,89 @@ export default function ConnectionDrawer({
         )}
 
         <div className="conn-list">
-          {connections.map((c) => (
-            <div key={c.id} className={`conn-item ${c.id === activeId ? 'active' : ''}`}>
-              <button type="button" className="conn-select" onClick={() => onSelectConnection(c.id)}>
-                <strong>{c.name}</strong>
-                <small>{c.brokers.join(', ') || '—'}</small>
-                {c.schemaRegistryUrl ? <small className="sr-hint">SR</small> : null}
-              </button>
-              <div className="conn-actions">
-                <button type="button" onClick={() => onEditConnection(c.id)} title={tr('edit')}>
-                  {tr('edit')}
+          {connections.map((c) => {
+            const active = c.id === activeId
+            return (
+              <div key={c.id} className={`conn-item ${active ? 'active' : ''}`}>
+                <button type="button" className="conn-select" onClick={() => onSelectConnection(c.id)}>
+                  <strong>
+                    {active && <span className={`dot ${connected ? 'on' : ''}`} />}
+                    {c.name}
+                  </strong>
+                  <small>
+                    {active ? (connected ? tr('online') : tr('offline')) + ' · ' : ''}
+                    {c.brokers.join(', ') || '—'}
+                  </small>
+                  {c.schemaRegistryUrl ? <small className="sr-hint">SR</small> : null}
                 </button>
-                <button type="button" onClick={() => onDuplicateConnection(c.id)} title={tr('dup')}>
-                  {tr('dup')}
-                </button>
-                <button
-                  type="button"
-                  className="danger-text"
-                  onClick={() => onRequestDeleteConnection(c.id)}
-                  title={tr('del')}
-                >
-                  {tr('del')}
-                </button>
+                <div className="conn-actions">
+                  {active && (
+                    <>
+                      <button
+                        type="button"
+                        className="conn-icon-btn"
+                        disabled={busy || connected}
+                        onClick={onConnect}
+                        title={tr('connect')}
+                        aria-label={tr('connect')}
+                      >
+                        <ConnectIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="conn-icon-btn"
+                        disabled={busy || !connected}
+                        onClick={onReconnect}
+                        title={tr('reconnect')}
+                        aria-label={tr('reconnect')}
+                      >
+                        <ReconnectIcon />
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="conn-icon-btn"
+                    onClick={() => onEditConnection(c.id)}
+                    title={tr('edit')}
+                    aria-label={tr('edit')}
+                  >
+                    <EditIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="conn-icon-btn"
+                    onClick={() => onDuplicateConnection(c.id)}
+                    title={tr('dup')}
+                    aria-label={tr('dup')}
+                  >
+                    <DupIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="conn-icon-btn danger-text"
+                    onClick={() => onRequestDeleteConnection(c.id)}
+                    title={tr('del')}
+                    aria-label={tr('del')}
+                  >
+                    <DelIcon />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         <div className="panel" ref={detailsRef}>
           <h2>{tr('editTitle', { name: config.name })}</h2>
           <p className="hint">{tr('editHint')}</p>
-          <div className="field">
-            <label>{tr('name')}</label>
-            <input value={config.name} onChange={(e) => onUpdateConfig({ name: e.target.value })} />
+          <div className={`field ${nameOk ? '' : 'field-missing'}`.trim()}>
+            {reqLabel(tr('name'), nameOk)}
+            <input
+              value={config.name}
+              onChange={(e) => onUpdateConfig({ name: e.target.value })}
+              aria-required
+            />
           </div>
 
           <div className="field auth-method-field">
@@ -174,9 +255,13 @@ export default function ConnectionDrawer({
             </div>
           </div>
 
-          <div className="field">
-            <label>{tr('brokers')}</label>
-            <input value={brokersText} onChange={(e) => setBrokersText(e.target.value)} />
+          <div className={`field ${brokersOk ? '' : 'field-missing'}`.trim()}>
+            {reqLabel(tr('brokers'), brokersOk)}
+            <input
+              value={brokersText}
+              onChange={(e) => setBrokersText(e.target.value)}
+              aria-required
+            />
           </div>
           <div className="row">
             <label className="status">
@@ -210,8 +295,8 @@ export default function ConnectionDrawer({
                   <option value="scram-sha-512">SCRAM-SHA-512</option>
                 </select>
               </div>
-              <div className="field">
-                <label>{tr('username')}</label>
+              <div className={`field ${saslUserOk ? '' : 'field-missing'}`.trim()}>
+                {reqLabel(tr('username'), saslUserOk)}
                 <input
                   value={config.sasl?.username || ''}
                   onChange={(e) =>
@@ -224,10 +309,11 @@ export default function ConnectionDrawer({
                     })
                   }
                   autoComplete="username"
+                  aria-required
                 />
               </div>
-              <div className="field">
-                <label>{tr('password')}</label>
+              <div className={`field ${saslPassOk ? '' : 'field-missing'}`.trim()}>
+                {reqLabel(tr('password'), saslPassOk)}
                 <PasswordInput
                   value={config.sasl?.password || ''}
                   onChange={(password) =>
@@ -250,13 +336,13 @@ export default function ConnectionDrawer({
           <div className="sr-fold">
             <button
               type="button"
-              className={`sr-fold-toggle ${hasSr ? 'has-sr' : ''}`}
+              className={`sr-fold-toggle ${srStatus === 'ok' ? 'has-sr' : ''} ${srStatus === 'fail' ? 'sr-fail' : ''}`}
               onClick={() => setSrOpen((v) => !v)}
               aria-expanded={srOpen}
             >
               <span>{tr('srToggle')}</span>
               <span className="sr-fold-meta">
-                {hasSr ? tr('srToggleOn') : tr('srToggleOff')}
+                {srMeta}
                 <span className="sr-fold-chevron">{srOpen ? '▴' : '▾'}</span>
               </span>
             </button>
@@ -267,12 +353,12 @@ export default function ConnectionDrawer({
             )}
             {srOpen && (
               <div className="sr-fold-body">
-                <div className="field">
-                  <label>{tr('srUrl')}</label>
+                <div className={`field ${srUrlOk ? '' : 'field-missing'}`.trim()}>
+                  {reqLabel(tr('srUrl'), srUrlOk)}
                   <input
                     value={config.schemaRegistryUrl || ''}
                     onChange={(e) => onUpdateConfig({ schemaRegistryUrl: e.target.value })}
-                    placeholder="http://localhost:18081"
+                    aria-required={srUrlNeeded}
                   />
                 </div>
                 <div className="field">
@@ -305,6 +391,110 @@ export default function ConnectionDrawer({
                     hideLabel={tr('hidePassword')}
                   />
                 </div>
+                <div className="field">
+                  <label>{tr('srTlsCa')}</label>
+                  <div className="saved-queries-row">
+                    <input
+                      value={config.schemaRegistryTls?.caPath || ''}
+                      onChange={(e) =>
+                        onUpdateConfig({
+                          schemaRegistryTls: {
+                            ...config.schemaRegistryTls,
+                            caPath: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder={tr('srTlsPathPh')}
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const p = await window.kafdesk.pickPemFile?.()
+                        if (p)
+                          onUpdateConfig({
+                            schemaRegistryTls: { ...config.schemaRegistryTls, caPath: p },
+                          })
+                      }}
+                    >
+                      {tr('browse')}
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <label>{tr('srTlsCert')}</label>
+                  <div className="saved-queries-row">
+                    <input
+                      value={config.schemaRegistryTls?.certPath || ''}
+                      onChange={(e) =>
+                        onUpdateConfig({
+                          schemaRegistryTls: {
+                            ...config.schemaRegistryTls,
+                            certPath: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder={tr('srTlsPathPh')}
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const p = await window.kafdesk.pickPemFile?.()
+                        if (p)
+                          onUpdateConfig({
+                            schemaRegistryTls: { ...config.schemaRegistryTls, certPath: p },
+                          })
+                      }}
+                    >
+                      {tr('browse')}
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <label>{tr('srTlsKey')}</label>
+                  <div className="saved-queries-row">
+                    <input
+                      value={config.schemaRegistryTls?.keyPath || ''}
+                      onChange={(e) =>
+                        onUpdateConfig({
+                          schemaRegistryTls: {
+                            ...config.schemaRegistryTls,
+                            keyPath: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder={tr('srTlsPathPh')}
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const p = await window.kafdesk.pickPemFile?.()
+                        if (p)
+                          onUpdateConfig({
+                            schemaRegistryTls: { ...config.schemaRegistryTls, keyPath: p },
+                          })
+                      }}
+                    >
+                      {tr('browse')}
+                    </button>
+                  </div>
+                </div>
+                <div className="row">
+                  <label className="status">
+                    <input
+                      type="checkbox"
+                      checked={config.schemaRegistryTls?.rejectUnauthorized === false}
+                      onChange={(e) =>
+                        onUpdateConfig({
+                          schemaRegistryTls: {
+                            ...config.schemaRegistryTls,
+                            rejectUnauthorized: !e.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    {tr('srTlsInsecure')}
+                  </label>
+                </div>
                 {hasSr && (
                   <button
                     type="button"
@@ -313,6 +503,7 @@ export default function ConnectionDrawer({
                       onUpdateConfig({
                         schemaRegistryUrl: '',
                         schemaRegistryAuth: undefined,
+                        schemaRegistryTls: undefined,
                       })
                     }
                   >
@@ -327,15 +518,31 @@ export default function ConnectionDrawer({
             <button type="button" disabled={busy} onClick={onSaveConnectionDetails}>
               {tr('save')}
             </button>
-            {!connected ? (
-              <button className="primary" disabled={busy} onClick={onConnect}>
-                {tr('connect')}
-              </button>
-            ) : (
-              <button disabled={busy} onClick={onDisconnect}>
-                {tr('disconnect')}
-              </button>
-            )}
+            <button
+              type="button"
+              className="primary icon-action"
+              disabled={busy || connected}
+              onClick={onConnect}
+              title={tr('connect')}
+              aria-label={tr('connect')}
+            >
+              <ConnectIcon />
+              <span>{tr('connect')}</span>
+            </button>
+            <button
+              type="button"
+              className="icon-action"
+              disabled={busy || !connected}
+              onClick={onReconnect}
+              title={tr('reconnect')}
+              aria-label={tr('reconnect')}
+            >
+              <ReconnectIcon />
+              <span>{tr('reconnect')}</span>
+            </button>
+            <button disabled={busy || !connected} onClick={onDisconnect}>
+              {tr('disconnect')}
+            </button>
             <button disabled={busy} onClick={onPing}>
               {tr('ping')}
             </button>
