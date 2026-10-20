@@ -31,7 +31,6 @@ export default function App() {
         pendingDeleteId={a.pendingDeleteId}
         config={a.config}
         authMethod={a.authMethod}
-        authSession={a.authSession}
         brokersText={a.brokersText}
         setBrokersText={a.setBrokersText}
         connected={a.connected}
@@ -49,11 +48,6 @@ export default function App() {
         onConfirmDeleteConnection={a.confirmDeleteConnection}
         onUpdateConfig={a.updateConfig}
         onSetAuthMethod={a.setAuthMethod}
-        onSsoLogin={a.ssoLogin}
-        onSsoPasswordLogin={a.ssoPasswordLogin}
-        onSsoForgetCredentials={a.ssoForgetCredentials}
-        storedCreds={a.storedCreds}
-        onSsoLogout={a.ssoLogout}
         onSaveConnectionDetails={a.saveConnectionDetails}
         onConnect={a.connect}
         onDisconnect={a.disconnect}
@@ -195,15 +189,22 @@ export default function App() {
               setTopicQuery={a.setTopicQuery}
               selectedTopic={a.selectedTopic}
               onSelectTopic={a.selectTopic}
+              pinnedTopics={a.pinnedTopics}
+              onTogglePin={a.togglePinTopic}
             />
 
             {a.tab === 'consume' && (
               <ConsumePanel
                 tr={tr}
                 topicDetails={a.topicDetails}
+                topicLag={a.topicLag}
                 messages={a.messages}
                 selectedTopic={a.selectedTopic}
                 busy={a.loadingMessages}
+                diffMessages={a.diffMessages}
+                onToggleDiff={a.toggleDiffMessage}
+                onClearDiff={a.clearDiff}
+                onRepublish={a.republishMessage}
               />
             )}
             {a.tab === 'produce' && (
@@ -224,6 +225,10 @@ export default function App() {
                 busy={a.busy}
                 onSendMessage={a.sendMessage}
                 produceResult={a.produceResult}
+                templates={a.produceTemplates}
+                onSaveTemplate={a.saveProduceTemplate}
+                onApplyTemplate={a.applyProduceTemplate}
+                onDeleteTemplate={a.deleteProduceTemplate}
               />
             )}
             {a.tab === 'tail' && (

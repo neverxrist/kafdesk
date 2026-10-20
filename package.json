@@ -16,10 +16,7 @@
     "build:mac": "tsc --noEmit && vite build && electron-builder --mac --arm64 --x64",
     "build:win": "tsc --noEmit && vite build && electron-builder --win --x64",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit --pretty false",
-    "kafka:up": "docker compose up -d",
-    "kafka:down": "docker compose down -v",
-    "kafka:logs": "docker compose logs -f"
+    "typecheck": "tsc --noEmit --pretty false"
   },
   "dependencies": {
     "@kafkajs/confluent-schema-registry": "^3.9.0",

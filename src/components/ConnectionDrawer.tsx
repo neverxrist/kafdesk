@@ -1,7 +1,8 @@
 import { useEffect, useState, type RefObject } from 'react'
-import type { AuthSessionPublic, ClusterConfig, SchemaRegistryStatus } from '../../electron/types'
+import type { ClusterConfig, SchemaRegistryStatus } from '../../electron/types'
 import type { AuthMethodUi } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
+import PasswordInput from './PasswordInput'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -14,7 +15,6 @@ export default function ConnectionDrawer({
   pendingDeleteId,
   config,
   authMethod,
-  authSession,
   brokersText,
   setBrokersText,
   connected,
@@ -32,11 +32,6 @@ export default function ConnectionDrawer({
   onConfirmDeleteConnection,
   onUpdateConfig,
   onSetAuthMethod,
-  onSsoLogin,
-  onSsoPasswordLogin,
-  onSsoForgetCredentials,
-  storedCreds,
-  onSsoLogout,
   onSaveConnectionDetails,
   onConnect,
   onDisconnect,
@@ -50,7 +45,6 @@ export default function ConnectionDrawer({
   pendingDeleteId: string | null
   config: ClusterConfig
   authMethod: AuthMethodUi
-  authSession: AuthSessionPublic
   brokersText: string
   setBrokersText: (v: string) => void
   connected: boolean
@@ -68,11 +62,6 @@ export default function ConnectionDrawer({
   onConfirmDeleteConnection: () => void
   onUpdateConfig: (patch: Partial<ClusterConfig>) => void
   onSetAuthMethod: (method: AuthMethodUi) => void
-  onSsoLogin: () => void
-  onSsoPasswordLogin: (username: string, password: string, remember: boolean) => void
-  onSsoForgetCredentials: () => void
-  storedCreds: { username?: string; hasPassword: boolean }
-  onSsoLogout: () => void
   onSaveConnectionDetails: () => void
   onConnect: () => void
   onDisconnect: () => void
@@ -80,13 +69,6 @@ export default function ConnectionDrawer({
 }) {
   const hasSr = Boolean(config.schemaRegistryUrl?.trim())
   const [srOpen, setSrOpen] = useState(false)
-  const [ssoUsername, setSsoUsername] = useState('')
-  const [ssoPassword, setSsoPassword] = useState('')
-  const [rememberPw, setRememberPw] = useState(true)
-
-  useEffect(() => {
-    if (storedCreds.username && !ssoUsername) setSsoUsername(storedCreds.username)
-  }, [storedCreds.username]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Keep panel closed when switching connections; reopen only on demand
@@ -188,17 +170,7 @@ export default function ConnectionDrawer({
               >
                 <option value="none">{tr('authNone')}</option>
                 <option value="sasl">{tr('authSasl')}</option>
-                <option value="keycloak">{tr('authKeycloak')}</option>
-                <option value="oidc">{tr('authOidc')}</option>
               </select>
-              {(authMethod === 'keycloak' || authMethod === 'oidc') && (
-                <span
-                  className="warn-tri"
-                  title={authMethod === 'oidc' ? tr('authOidcWarn') : tr('authKeycloakWarn')}
-                >
-                  ⚠
-                </span>
-              )}
             </div>
           </div>
 
@@ -256,155 +228,23 @@ export default function ConnectionDrawer({
               </div>
               <div className="field">
                 <label>{tr('password')}</label>
-                <input
-                  type="password"
+                <PasswordInput
                   value={config.sasl?.password || ''}
-                  onChange={(e) =>
+                  onChange={(password) =>
                     onUpdateConfig({
                       sasl: {
                         mechanism: config.sasl?.mechanism || 'plain',
                         username: config.sasl?.username || '',
-                        password: e.target.value,
+                        password,
                       },
                     })
                   }
                   autoComplete="current-password"
+                  showLabel={tr('showPassword')}
+                  hideLabel={tr('hidePassword')}
                 />
               </div>
             </>
-          )}
-
-          {authMethod === 'keycloak' && (
-            <>
-              <p className="hint">{tr('clientIdHint')}</p>
-              <div className="field">
-                <label>{tr('keycloakUrl')}</label>
-                <input
-                  value={config.sso?.keycloak?.url || ''}
-                  onChange={(e) =>
-                    onUpdateConfig({
-                      sso: {
-                        providerId: 'keycloak',
-                        keycloak: {
-                          url: e.target.value,
-                          realm: config.sso?.keycloak?.realm || '',
-                          clientId: config.sso?.keycloak?.clientId || '',
-                        },
-                      },
-                    })
-                  }
-                  placeholder="https://sso.example.com"
-                />
-              </div>
-              <div className="field">
-                <label>{tr('realm')}</label>
-                <input
-                  value={config.sso?.keycloak?.realm || ''}
-                  onChange={(e) =>
-                    onUpdateConfig({
-                      sso: {
-                        providerId: 'keycloak',
-                        keycloak: {
-                          url: config.sso?.keycloak?.url || '',
-                          realm: e.target.value,
-                          clientId: config.sso?.keycloak?.clientId || '',
-                        },
-                      },
-                    })
-                  }
-                  placeholder="realm"
-                />
-              </div>
-              <div className="field">
-                <label>{tr('clientId')}</label>
-                <input
-                  value={config.sso?.keycloak?.clientId || ''}
-                  onChange={(e) =>
-                    onUpdateConfig({
-                      sso: {
-                        providerId: 'keycloak',
-                        keycloak: {
-                          url: config.sso?.keycloak?.url || '',
-                          realm: config.sso?.keycloak?.realm || '',
-                          clientId: e.target.value,
-                        },
-                      },
-                    })
-                  }
-                  placeholder="my-app"
-                />
-              </div>
-              <div className="field">
-                <label>{tr('ssoUsername')}</label>
-                <input
-                  value={ssoUsername}
-                  onChange={(e) => setSsoUsername(e.target.value)}
-                  autoComplete="username"
-                  placeholder="login"
-                />
-              </div>
-              <div className="field">
-                <label>{tr('ssoPassword')}</label>
-                <input
-                  type="password"
-                  value={ssoPassword}
-                  onChange={(e) => setSsoPassword(e.target.value)}
-                  autoComplete="current-password"
-                  placeholder={storedCreds.hasPassword ? tr('ssoPasswordSaved') : ''}
-                />
-              </div>
-              <label className="settings-toggle" style={{ marginBottom: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={rememberPw}
-                  onChange={(e) => setRememberPw(e.target.checked)}
-                />
-                <span>{tr('rememberPassword')}</span>
-              </label>
-              <div className="actions">
-                {!authSession.loggedIn ? (
-                  <>
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={busy || !ssoUsername.trim() || (!ssoPassword && !storedCreds.hasPassword)}
-                      onClick={() => onSsoPasswordLogin(ssoUsername, ssoPassword, rememberPw)}
-                    >
-                      {tr('loginWithPassword')}
-                    </button>
-                    <button type="button" disabled={busy} onClick={onSsoLogin}>
-                      {tr('loginBrowser')}
-                    </button>
-                  </>
-                ) : (
-                  <button type="button" disabled={busy} onClick={onSsoLogout}>
-                    {tr('logoutSso')}
-                  </button>
-                )}
-                {storedCreds.hasPassword && (
-                  <button type="button" disabled={busy} onClick={onSsoForgetCredentials}>
-                    {tr('forgetPassword')}
-                  </button>
-                )}
-              </div>
-              <div className="status status-block">
-                <span className={`dot ${authSession.loggedIn ? 'on' : ''}`} />
-                {authSession.loggedIn
-                  ? tr('ssoOk', {
-                      user: authSession.username || authSession.email || 'ok',
-                    })
-                  : tr('ssoOffline')}
-              </div>
-            </>
-          )}
-
-          {authMethod === 'oidc' && (
-            <div className="hint">
-              <span className="warn-tri" title={tr('authOidcWarn')}>
-                ⚠
-              </span>{' '}
-              {tr('authOidcWarn')}
-            </div>
           )}
 
           <div className="sr-fold">
@@ -451,17 +291,18 @@ export default function ConnectionDrawer({
                 </div>
                 <div className="field">
                   <label>{tr('srPass')}</label>
-                  <input
-                    type="password"
+                  <PasswordInput
                     value={config.schemaRegistryAuth?.password || ''}
-                    onChange={(e) =>
+                    onChange={(password) =>
                       onUpdateConfig({
                         schemaRegistryAuth: {
                           username: config.schemaRegistryAuth?.username || '',
-                          password: e.target.value,
+                          password,
                         },
                       })
                     }
+                    showLabel={tr('showPassword')}
+                    hideLabel={tr('hidePassword')}
                   />
                 </div>
                 {hasSr && (

@@ -106,6 +106,13 @@ export default function TailPanel({
           key={`${m.partition}-${m.offset}-${i}`}
           message={m}
           keyLabel={tr('msgKey')}
+          labels={{
+            republish: '',
+            diffSelect: '',
+            diffSelected: '',
+            expand: tr('expand'),
+            collapse: tr('collapse'),
+          }}
         />
       ))}
     </section>

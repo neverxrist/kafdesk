@@ -25,6 +25,16 @@ import {
   timeInputToMs,
   type SavedConsumeQuery,
 } from '../lib/savedQueries'
+import {
+  loadPinnedTopics,
+  togglePinnedTopic,
+} from '../lib/pinnedTopics'
+import {
+  loadProduceTemplates,
+  persistProduceTemplates,
+  type ProduceTemplate,
+} from '../lib/produceTemplates'
+import { guessAvroSubject, messageBodyText, messageId } from '../lib/messageText'
 import type { AppLogEntry } from './useAppLogs'
 
 export type { SavedConsumeQuery }
@@ -66,6 +76,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [topicQuery, setTopicQuery] = useState('')
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null)
   const [topicDetails, setTopicDetails] = useState<TopicInfo | null>(null)
+  const [topicLag, setTopicLag] = useState<number | null>(null)
 
   const [messages, setMessages] = useState<KafkaMessageView[]>([])
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -92,6 +103,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [subject, setSubject] = useState('')
   const [schemaInfo, setSchemaInfo] = useState<SchemaSubjectInfo | null>(null)
   const [produceResult, setProduceResult] = useState<string | null>(null)
+  const [produceTemplates, setProduceTemplates] = useState<ProduceTemplate[]>(() =>
+    loadProduceTemplates(),
+  )
+  const [pinnedTopics, setPinnedTopics] = useState<string[]>([])
+  const [diffMessages, setDiffMessages] = useState<KafkaMessageView[]>([])
 
   const [groups, setGroups] = useState<ConsumerGroupInfo[]>([])
   const [groupQuery, setGroupQuery] = useState('')
@@ -128,6 +144,12 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     if (!q) return groups
     return groups.filter((g) => g.groupId.toLowerCase().includes(q))
   }, [groups, groupQuery])
+
+  useEffect(() => {
+    return () => {
+      if (filterReloadTimer.current) clearTimeout(filterReloadTimer.current)
+    }
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? '1' : '0')
@@ -194,40 +216,112 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       updateConfig({ authMode: 'none' })
       return
     }
-    if (method === 'sasl') {
-      updateConfig({
-        authMode: 'sasl',
-        sasl: {
-          mechanism: config?.sasl?.mechanism || 'plain',
-          username: config?.sasl?.username || '',
-          password: config?.sasl?.password || '',
-        },
-      })
-      return
-    }
-    if (method === 'keycloak') {
-      updateConfig({
-        authMode: 'oauthbearer',
-        sso: {
-          providerId: 'keycloak',
-          keycloak: config?.sso?.keycloak || { url: '', realm: '', clientId: '' },
-        },
-      })
-      return
-    }
     updateConfig({
-      authMode: 'oauthbearer',
-      sso: {
-        providerId: 'oidc',
-        oidc: config?.sso?.oidc || { issuer: '', clientId: '' },
-        keycloak: config?.sso?.keycloak,
+      authMode: 'sasl',
+      sasl: {
+        mechanism: config?.sasl?.mechanism || 'plain',
+        username: config?.sasl?.username || '',
+        password: config?.sasl?.password || '',
       },
     })
+  }
+
+  useEffect(() => {
+    if (!config?.id) {
+      setPinnedTopics([])
+      return
+    }
+    setPinnedTopics(loadPinnedTopics(config.id))
+  }, [config?.id])
+
+  function togglePinTopic(name: string) {
+    if (!config?.id) return
+    setPinnedTopics(togglePinnedTopic(config.id, name))
+  }
+
+  function toggleDiffMessage(m: KafkaMessageView) {
+    setDiffMessages((prev) => {
+      const id = messageId(m)
+      const exists = prev.find((x) => messageId(x) === id)
+      if (exists) return prev.filter((x) => messageId(x) !== id)
+      if (prev.length >= 2) return [prev[1], m]
+      return [...prev, m]
+    })
+  }
+
+  function clearDiff() {
+    setDiffMessages([])
+  }
+
+  async function republishMessage(m: KafkaMessageView) {
+    const format =
+      m.format === 'avro' ? 'avro' : m.format === 'json' ? 'json' : 'string'
+    setProduceFormat(format)
+    setProduceKey(m.key ?? '')
+    setProduceValue(messageBodyText(m))
+    setProduceResult(null)
+    setTab('produce')
+    if (format === 'avro') {
+      const guessed = guessAvroSubject(m.topic || selectedTopic || '', subjects)
+      if (guessed) await onSubjectChange(guessed)
+      else setSubject('')
+    } else {
+      setSubject('')
+      setSchemaInfo(null)
+    }
+    pushLog(
+      'info',
+      `Republish prepared · p${m.partition} offset ${m.offset} as ${format}`,
+    )
+  }
+
+  function saveProduceTemplate(name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const next: ProduceTemplate[] = [
+      {
+        id: crypto.randomUUID(),
+        name: trimmed,
+        createdAt: Date.now(),
+        topic: selectedTopic,
+        format: produceFormat,
+        subject,
+        key: produceKey,
+        value: produceValue,
+      },
+      ...produceTemplates,
+    ]
+    setProduceTemplates(next)
+    persistProduceTemplates(next)
+  }
+
+  async function applyProduceTemplate(id: string) {
+    const tpl = produceTemplates.find((t) => t.id === id)
+    if (!tpl) return
+    setProduceFormat(tpl.format)
+    setProduceKey(tpl.key)
+    setProduceValue(tpl.value)
+    if (tpl.topic && tpl.topic !== selectedTopic) {
+      selectTopic(tpl.topic)
+    }
+    if (tpl.format === 'avro' && tpl.subject) {
+      await onSubjectChange(tpl.subject)
+    } else {
+      setSubject(tpl.subject)
+      setSchemaInfo(null)
+    }
+  }
+
+  function deleteProduceTemplate(id: string) {
+    const next = produceTemplates.filter((t) => t.id !== id)
+    setProduceTemplates(next)
+    persistProduceTemplates(next)
   }
 
   function selectConnection(id: string) {
     if (id === activeId) return
     if (connected) void disconnect()
+    setPendingDeleteId(null)
     setActiveId(id)
     setPingInfo(null)
     setError(null)
@@ -236,10 +330,40 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const detailsRef = useRef<HTMLDivElement>(null)
   const selectedTopicRef = useRef<string | null>(null)
   selectedTopicRef.current = selectedTopic
+  const tabRef = useRef(tab)
+  tabRef.current = tab
+  const consumeGenRef = useRef(0)
+  const enrichGenRef = useRef(0)
+  const filterReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const filterStateRef = useRef<ConsumeFilterState>({
+    search,
+    searchKey,
+    headerKey,
+    headerValue,
+    partitionFilter,
+    startFrom,
+    startOffset,
+    limit,
+    timeFrom,
+    timeTo,
+  })
+  filterStateRef.current = {
+    search,
+    searchKey,
+    headerKey,
+    headerValue,
+    partitionFilter,
+    startFrom,
+    startOffset,
+    limit,
+    timeFrom,
+    timeTo,
+  }
 
   function addConnection() {
     const next = defaultConnection()
     next.name = `Connection ${connections.length + 1}`
+    setPendingDeleteId(null)
     setConnections((prev) => [...prev, next])
     setActiveId(next.id)
     if (connected) void disconnect()
@@ -426,6 +550,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       }
       const list = await window.kafdesk.listTopics()
       setTopics(list)
+      void enrichTopicApprox(list)
       if (res.schemaRegistry === 'ok') {
         try {
           setSubjects((await window.kafdesk.listSubjects()).sort())
@@ -450,6 +575,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   async function disconnect() {
     setBusy(true)
+    enrichGenRef.current += 1
     try {
       if (tailing) await window.kafdesk.tailStop()
       await window.kafdesk.disconnect()
@@ -458,6 +584,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setTopics([])
       setSelectedTopic(null)
       setTopicDetails(null)
+      setTopicLag(null)
       setMessages([])
       setPingInfo(null)
       setGroups([])
@@ -476,27 +603,15 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setBusy(true)
     setError(null)
     setPingInfo(null)
+    const wasConnected = connected
     try {
-      if (!connected) {
-        const next = draftConfig()
-        updateConfig(next)
-        const res = await window.kafdesk.connect(next)
-        setConnected(true)
-        setSrStatus(res.schemaRegistry)
-        setTopics(await window.kafdesk.listTopics())
-        if (res.schemaRegistry === 'ok') {
-          try {
-            setSubjects((await window.kafdesk.listSubjects()).sort())
-          } catch {
-            setSubjects([])
-          }
-        } else {
-          setSubjects([])
-        }
-      }
+      const next = draftConfig()
+      updateConfig(next)
+      // Offline: one-shot probe (connect → check → disconnect). Online: live ping.
+      const res = wasConnected
+        ? await window.kafdesk.ping()
+        : await window.kafdesk.probe(next)
 
-      const res = await window.kafdesk.ping()
-      setSrStatus(res.schemaRegistry.status)
       const kafkaPart = res.kafka.ok
         ? `Kafka ${res.kafka.ms ?? '?'}ms`
         : `Kafka fail: ${res.kafka.error ?? 'error'}`
@@ -506,15 +621,75 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
           : res.schemaRegistry.status === 'ok'
             ? `SR ${res.schemaRegistry.ms ?? '?'}ms`
             : `SR fail: ${res.schemaRegistry.error ?? 'error'}`
-      setPingInfo(`${kafkaPart} · ${srPart}`)
-      if (!res.kafka.ok) setConnected(false)
+
+      if (wasConnected) {
+        setPingInfo(`${kafkaPart} · ${srPart}`)
+        setSrStatus(res.schemaRegistry.status)
+        if (!res.kafka.ok) {
+          setConnected(false)
+          setTopics([])
+          setSubjects([])
+        }
+      } else if (res.kafka.ok) {
+        // Stay offline — probe only. Make that explicit so "offline" ≠ "unreachable".
+        setPingInfo(`OK (not connected) · ${kafkaPart} · ${srPart}`)
+      } else {
+        setPingInfo(`unreachable · ${kafkaPart} · ${srPart}`)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setConnected(false)
-      setSrStatus('none')
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
+      setPingInfo(`unreachable · ${msg}`)
+      if (wasConnected) {
+        setConnected(false)
+        setTopics([])
+        setSubjects([])
+        setSrStatus('none')
+      }
     } finally {
       setBusy(false)
     }
+  }
+
+  async function enrichTopicApprox(list: TopicInfo[]) {
+    if (!window.kafdesk?.getTopicOffsets || list.length === 0) return
+    const gen = ++enrichGenRef.current
+    const concurrency = 6
+    let cursor = 0
+    const merged = new Map<string, TopicInfo>()
+
+    function flush() {
+      if (enrichGenRef.current !== gen) return
+      setTopics((prev) =>
+        prev.map((p) => {
+          const next = merged.get(p.name)
+          return next
+            ? { ...p, approxMessages: next.approxMessages, partitions: next.partitions }
+            : p
+        }),
+      )
+    }
+
+    async function worker() {
+      while (cursor < list.length) {
+        if (enrichGenRef.current !== gen) return
+        const idx = cursor++
+        const t = list[idx]
+        try {
+          const full = await window.kafdesk.getTopicOffsets(t.name)
+          if (enrichGenRef.current !== gen) return
+          merged.set(t.name, full)
+          if (merged.size % 10 === 0) flush()
+        } catch {
+          /* skip topic */
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, list.length) }, () => worker()),
+    )
+    if (merged.size > 0) flush()
   }
 
   async function selectTopic(name: string) {
@@ -522,8 +697,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     selectedTopicRef.current = name
     setMessages([])
     setTailMessages([])
+    setDiffMessages([])
     setTopicDetails(null)
+    setTopicLag(null)
     setError(null)
+    filterStateRef.current = { ...filterStateRef.current, partitionFilter: 'all' }
     setPartitionFilter('all')
     setBusy(true)
     try {
@@ -531,9 +709,26 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         await window.kafdesk.tailStop()
         setTailing(false)
       }
-      setTopicDetails(await window.kafdesk.getTopicOffsets(name))
+      const details = await window.kafdesk.getTopicOffsets(name)
+      if (selectedTopicRef.current !== name) return
+      setTopicDetails(details)
+      setTopics((prev) =>
+        prev.map((t) =>
+          t.name === name
+            ? { ...t, approxMessages: details.approxMessages, partitions: details.partitions }
+            : t,
+        ),
+      )
       // Auto-load recent messages for the opened topic (all partitions)
-      await loadMessages(name, { ...currentFilterState(), partitionFilter: 'all' })
+      await loadMessages(name, { ...filterStateRef.current, partitionFilter: 'all' })
+      void window.kafdesk
+        .getLagSummary?.(name)
+        .then((res) => {
+          if (selectedTopicRef.current === name) setTopicLag(res.totalLag)
+        })
+        .catch(() => {
+          if (selectedTopicRef.current === name) setTopicLag(null)
+        })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -542,18 +737,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   function currentFilterState(): ConsumeFilterState {
-    return {
-      search,
-      searchKey,
-      headerKey,
-      headerValue,
-      partitionFilter,
-      startFrom,
-      startOffset,
-      limit,
-      timeFrom,
-      timeTo,
-    }
+    return { ...filterStateRef.current }
   }
 
   function partitionsFor(filter: string): number[] | undefined {
@@ -566,7 +750,16 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     return partitionsFor(partitionFilter)
   }
 
+  function cancelScheduledConsumeReload() {
+    if (filterReloadTimer.current) {
+      clearTimeout(filterReloadTimer.current)
+      filterReloadTimer.current = null
+    }
+  }
+
   function applyFilterState(f: ConsumeFilterState) {
+    cancelScheduledConsumeReload()
+    filterStateRef.current = f
     setSearch(f.search)
     setSearchKey(f.searchKey)
     setHeaderKey(f.headerKey)
@@ -577,6 +770,61 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setLimit(f.limit)
     setTimeFrom(f.timeFrom)
     setTimeTo(f.timeTo)
+  }
+
+  function scheduleConsumeReload(patch: Partial<ConsumeFilterState>, delayMs = 0) {
+    filterStateRef.current = { ...filterStateRef.current, ...patch }
+    cancelScheduledConsumeReload()
+    const run = () => {
+      filterReloadTimer.current = null
+      const topic = selectedTopicRef.current
+      if (!topic || tabRef.current !== 'consume') return
+      void loadMessages(topic, { ...filterStateRef.current })
+    }
+    if (delayMs <= 0) run()
+    else filterReloadTimer.current = setTimeout(run, delayMs)
+  }
+
+  /** UI setters: update state and re-fetch (selects immediately, text debounced). */
+  function setSearchFilter(v: string) {
+    setSearch(v)
+    scheduleConsumeReload({ search: v }, 350)
+  }
+  function setSearchKeyFilter(v: string) {
+    setSearchKey(v)
+    scheduleConsumeReload({ searchKey: v }, 350)
+  }
+  function setHeaderKeyFilter(v: string) {
+    setHeaderKey(v)
+    scheduleConsumeReload({ headerKey: v }, 350)
+  }
+  function setHeaderValueFilter(v: string) {
+    setHeaderValue(v)
+    scheduleConsumeReload({ headerValue: v }, 350)
+  }
+  function setTimeFromFilter(v: string) {
+    setTimeFrom(v)
+    scheduleConsumeReload({ timeFrom: v })
+  }
+  function setTimeToFilter(v: string) {
+    setTimeTo(v)
+    scheduleConsumeReload({ timeTo: v })
+  }
+  function setPartitionFilterUI(v: string) {
+    setPartitionFilter(v)
+    scheduleConsumeReload({ partitionFilter: v })
+  }
+  function setStartFromFilter(v: ConsumeStartFrom) {
+    setStartFrom(v)
+    scheduleConsumeReload({ startFrom: v })
+  }
+  function setStartOffsetFilter(v: string) {
+    setStartOffset(v)
+    scheduleConsumeReload({ startOffset: v }, 350)
+  }
+  function setLimitFilter(v: number) {
+    setLimit(v)
+    scheduleConsumeReload({ limit: v }, 350)
   }
 
   function saveCurrentQuery(name: string) {
@@ -630,7 +878,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   async function loadMessages(topicName?: string, filterOverride?: ConsumeFilterState) {
     const topic = topicName || selectedTopic
     if (!topic) return
-    const f = filterOverride ?? currentFilterState()
+    cancelScheduledConsumeReload()
+    const f = filterOverride ?? { ...filterStateRef.current }
+    const gen = ++consumeGenRef.current
     setLoadingMessages(true)
     setError(null)
     try {
@@ -651,14 +901,18 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         timeTo: timeInputToMs(f.timeTo),
         partitions: partitionsFor(f.partitionFilter),
       })
-      // Ignore stale responses if user already switched topic
-      if (selectedTopicRef.current === topic) {
+      // Ignore stale responses if a newer filter/topic request already started
+      if (selectedTopicRef.current === topic && consumeGenRef.current === gen) {
         setMessages(rows)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (consumeGenRef.current === gen) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
     } finally {
-      setLoadingMessages(false)
+      if (consumeGenRef.current === gen) {
+        setLoadingMessages(false)
+      }
     }
   }
 
@@ -885,35 +1139,42 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTab,
     selectedTopic,
     topicDetails,
+    topicLag,
     filteredTopics,
     topicQuery,
     setTopicQuery,
+    pinnedTopics,
+    togglePinTopic,
     messages,
+    diffMessages,
+    toggleDiffMessage,
+    clearDiff,
+    republishMessage,
     loadingMessages,
     search,
-    setSearch,
+    setSearch: setSearchFilter,
     searchKey,
-    setSearchKey,
+    setSearchKey: setSearchKeyFilter,
     headerKey,
-    setHeaderKey,
+    setHeaderKey: setHeaderKeyFilter,
     headerValue,
-    setHeaderValue,
+    setHeaderValue: setHeaderValueFilter,
     timeFrom,
-    setTimeFrom,
+    setTimeFrom: setTimeFromFilter,
     timeTo,
-    setTimeTo,
+    setTimeTo: setTimeToFilter,
     savedQueries,
     saveCurrentQuery,
     applySavedQuery,
     deleteSavedQuery,
     limit,
-    setLimit,
+    setLimit: setLimitFilter,
     startFrom,
-    setStartFrom,
+    setStartFrom: setStartFromFilter,
     startOffset,
-    setStartOffset,
+    setStartOffset: setStartOffsetFilter,
     partitionFilter,
-    setPartitionFilter,
+    setPartitionFilter: setPartitionFilterUI,
     tailing,
     tailMessages,
     hasRegistry,
@@ -927,6 +1188,10 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     produceValue,
     setProduceValue,
     produceResult,
+    produceTemplates,
+    saveProduceTemplate,
+    applyProduceTemplate,
+    deleteProduceTemplate,
     groups,
     filteredGroups,
     groupQuery,

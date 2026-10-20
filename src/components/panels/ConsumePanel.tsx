@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../../electron/types'
 import MessageCard from '../MessageCard'
+import MessageDiffPanel from '../MessageDiffPanel'
 import type { useLocale } from '../../hooks/useLocale'
 import type { SavedConsumeQuery } from '../../lib/savedQueries'
+import { messageId } from '../../lib/messageText'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -180,8 +182,14 @@ export function ConsumeToolbar({
             : tr('moreFilters')}{' '}
           {showAdvanced ? '▴' : '▾'}
         </button>
-        <button className="primary" disabled={!selectedTopic || busy} onClick={onLoadMessages}>
-          {tr('load')}
+        <button
+          type="button"
+          className="primary"
+          disabled={!selectedTopic}
+          onClick={onLoadMessages}
+          title={tr('refresh')}
+        >
+          {busy ? tr('loadingMessages') : tr('refresh')}
         </button>
       </div>
 
@@ -238,7 +246,7 @@ export function ConsumeToolbar({
           <label>{tr('savedQueries')}</label>
           <div className="saved-queries-row">
             <select value={savedId} onChange={(e) => setSavedId(e.target.value)}>
-              <option value="">{savedQueries.length ? tr('selectSubject') : tr('noSavedQueries')}</option>
+              <option value="">{savedQueries.length ? tr('selectQuery') : tr('noSavedQueries')}</option>
               {savedQueries.map((q) => (
                 <option key={q.id} value={q.id}>
                   {q.name}
@@ -308,17 +316,29 @@ function groupByPartition(messages: KafkaMessageView[]): Array<{
 export default function ConsumePanel({
   tr,
   topicDetails,
+  topicLag,
   messages,
   selectedTopic,
   busy,
+  diffMessages,
+  onToggleDiff,
+  onClearDiff,
+  onRepublish,
 }: {
   tr: Tr
   topicDetails: TopicInfo | null
+  topicLag: number | null
   messages: KafkaMessageView[]
   selectedTopic: string | null
   busy?: boolean
+  diffMessages: KafkaMessageView[]
+  onToggleDiff: (m: KafkaMessageView) => void
+  onClearDiff: () => void
+  onRepublish: (m: KafkaMessageView) => void
 }) {
   const byPartition = useMemo(() => groupByPartition(messages), [messages])
+  const diffIds = useMemo(() => new Set(diffMessages.map(messageId)), [diffMessages])
+  const diffFull = diffMessages.length >= 2
 
   return (
     <section className="messages">
@@ -330,6 +350,12 @@ export default function ConsumePanel({
               <span className="topic-meta">
                 {' '}
                 · {tr('msgsApprox', { n: topicDetails.approxMessages })}
+              </span>
+            )}
+            {topicLag != null && (
+              <span className="topic-meta topic-lag">
+                {' '}
+                · {tr('topicLag', { n: topicLag })}
               </span>
             )}
           </h2>
@@ -354,6 +380,23 @@ export default function ConsumePanel({
         </div>
       )}
 
+      {diffMessages.length === 2 && (
+        <MessageDiffPanel
+          tr={tr}
+          left={diffMessages[0]}
+          right={diffMessages[1]}
+          onClear={onClearDiff}
+        />
+      )}
+      {diffMessages.length === 1 && (
+        <div className="msg-diff-hint panel">
+          {tr('diffPickSecond')}
+          <button type="button" onClick={onClearDiff}>
+            {tr('diffClear')}
+          </button>
+        </div>
+      )}
+
       {messages.length === 0 && (
         <div className="empty">
           {!selectedTopic
@@ -370,7 +413,22 @@ export default function ConsumePanel({
             {tr('loadedInPartition', { id: partition, n: partMsgs.length })}
           </div>
           {partMsgs.map((m) => (
-            <MessageCard key={`${m.partition}-${m.offset}`} message={m} keyLabel={tr('msgKey')} />
+            <MessageCard
+              key={`${m.partition}-${m.offset}`}
+              message={m}
+              keyLabel={tr('msgKey')}
+              selectedForDiff={diffIds.has(messageId(m))}
+              diffFull={diffFull}
+              onToggleDiff={onToggleDiff}
+              onRepublish={onRepublish}
+              labels={{
+                republish: tr('republish'),
+                diffSelect: tr('diffSelect'),
+                diffSelected: tr('diffSelected'),
+                expand: tr('expand'),
+                collapse: tr('collapse'),
+              }}
+            />
           ))}
         </div>
       ))}

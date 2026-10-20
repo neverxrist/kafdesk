@@ -155,6 +155,26 @@ export class KafkaService {
 
   async ping(): Promise<PingResult> {
     this.ensureAdmin()
+    return this.runPingChecks()
+  }
+
+  /**
+   * One-shot reachability check. If already connected, pings in place.
+   * Otherwise connects with `config`, measures, and disconnects — session stays offline.
+   */
+  async probe(config: ClusterConfig): Promise<PingResult> {
+    if (this.isConnected()) {
+      return this.runPingChecks()
+    }
+    try {
+      await this.connect(config)
+      return await this.runPingChecks()
+    } finally {
+      await this.disconnect()
+    }
+  }
+
+  private async runPingChecks(): Promise<PingResult> {
     const result: PingResult = {
       kafka: { ok: false },
       schemaRegistry: { status: 'none' },
@@ -174,13 +194,15 @@ export class KafkaService {
 
     if (!this.config?.schemaRegistryUrl?.trim()) {
       result.schemaRegistry = { status: 'none' }
-      this.schemaRegistryStatus = 'none'
       return result
     }
 
     const sr = await this.probeSchemaRegistry()
-    this.schemaRegistryStatus = sr.status
-    this.schemaRegistryError = sr.error
+    // Only persist SR status onto the live session when still connected after checks
+    if (this.isConnected()) {
+      this.schemaRegistryStatus = sr.status
+      this.schemaRegistryError = sr.error
+    }
     result.schemaRegistry = sr
     return result
   }
@@ -236,32 +258,37 @@ export class KafkaService {
 
   async getTopicOffsets(topic: string): Promise<TopicInfo> {
     this.ensureAdmin()
-    const topics = await this.listTopics()
-    const info = topics.find((t) => t.name === topic)
-    if (!info) throw new Error(`Topic not found: ${topic}`)
+    const described = await this.admin!.fetchTopicMetadata({ topics: [topic] })
+    const meta = described.topics.find((t) => t.name === topic)
+    if (!meta) throw new Error(`Topic not found: ${topic}`)
 
     const offsets = await this.admin!.fetchTopicOffsets(topic)
     const byPartition = new Map(offsets.map((o) => [Number(o.partition), o]))
 
-    const partitions = info.partitions.map((p) => {
-      const o = byPartition.get(p.partitionId)
-      const offsetLow = o?.low
-      const offsetHigh = o?.high
-      const approxMessages =
-        offsetLow != null && offsetHigh != null
-          ? Math.max(0, Number(offsetHigh) - Number(offsetLow))
-          : undefined
-      return {
-        ...p,
-        offsetLow,
-        offsetHigh,
-        approxMessages,
-      }
-    })
+    const partitions = meta.partitions
+      .map((p) => {
+        const o = byPartition.get(p.partitionId)
+        const offsetLow = o?.low
+        const offsetHigh = o?.high
+        const approxMessages =
+          offsetLow != null && offsetHigh != null
+            ? Math.max(0, Number(offsetHigh) - Number(offsetLow))
+            : undefined
+        return {
+          partitionId: p.partitionId,
+          leader: p.leader,
+          replicas: p.replicas,
+          isr: p.isr,
+          offsetLow,
+          offsetHigh,
+          approxMessages,
+        }
+      })
+      .sort((a, b) => a.partitionId - b.partitionId)
 
     const approxMessages = partitions.reduce((sum, p) => sum + (p.approxMessages ?? 0), 0)
 
-    return { ...info, partitions, approxMessages }
+    return { name: topic, partitions, approxMessages }
   }
 
   private async stopConsumer(): Promise<void> {

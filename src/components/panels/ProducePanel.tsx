@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import type { SchemaSubjectInfo } from '../../../electron/types'
 import type { useLocale } from '../../hooks/useLocale'
+import type { ProduceTemplate } from '../../lib/produceTemplates'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -28,6 +30,10 @@ export default function ProducePanel({
   busy,
   onSendMessage,
   produceResult,
+  templates,
+  onSaveTemplate,
+  onApplyTemplate,
+  onDeleteTemplate,
 }: {
   tr: Tr
   selectedTopic: string | null
@@ -45,9 +51,15 @@ export default function ProducePanel({
   busy: boolean
   onSendMessage: () => void
   produceResult: string | null
+  templates: ProduceTemplate[]
+  onSaveTemplate: (name: string) => void
+  onApplyTemplate: (id: string) => void
+  onDeleteTemplate: (id: string) => void
 }) {
   const formatLabel =
     produceFormat === 'avro' ? 'Avro' : produceFormat === 'json' ? 'JSON' : 'String'
+  const [templateId, setTemplateId] = useState('')
+  const [templateName, setTemplateName] = useState('')
 
   return (
     <section className="produce">
@@ -58,6 +70,56 @@ export default function ProducePanel({
             {tr('selectTopicLeft')}
           </div>
         )}
+
+        <div className="field produce-templates">
+          <label>{tr('produceTemplates')}</label>
+          <div className="saved-queries-row">
+            <select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              <option value="">
+                {templates.length ? tr('selectTemplate') : tr('noTemplates')}
+              </option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                  {t.topic ? ` · ${t.topic}` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!templateId || busy}
+              onClick={() => onApplyTemplate(templateId)}
+            >
+              {tr('applyTemplate')}
+            </button>
+            <button
+              type="button"
+              disabled={!templateId}
+              onClick={() => {
+                onDeleteTemplate(templateId)
+                setTemplateId('')
+              }}
+            >
+              {tr('deleteTemplate')}
+            </button>
+            <input
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              placeholder={tr('templateNamePh')}
+            />
+            <button
+              type="button"
+              disabled={!templateName.trim()}
+              onClick={() => {
+                onSaveTemplate(templateName)
+                setTemplateName('')
+              }}
+            >
+              {tr('saveTemplate')}
+            </button>
+          </div>
+        </div>
+
         <div className="field">
           <label>{tr('format')}</label>
           <select

@@ -96,6 +96,8 @@ function registerIpc() {
 
   ipcMain.handle('kafka:ping', async () => kafkaService.ping())
 
+  ipcMain.handle('kafka:probe', async (_e, config: ClusterConfig) => kafkaService.probe(config))
+
   ipcMain.handle('kafka:listTopics', async () => kafkaService.listTopics())
 
   ipcMain.handle('kafka:getTopicOffsets', async (_e, topic: string) =>

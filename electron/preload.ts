@@ -33,6 +33,8 @@ const api = {
       schemaRegistry: SchemaRegistryStatus
     }>,
   ping: () => ipcRenderer.invoke('kafka:ping') as Promise<PingResult>,
+  probe: (config: ClusterConfig) =>
+    ipcRenderer.invoke('kafka:probe', config) as Promise<PingResult>,
   listTopics: () => ipcRenderer.invoke('kafka:listTopics') as Promise<TopicInfo[]>,
   getTopicOffsets: (topic: string) =>
     ipcRenderer.invoke('kafka:getTopicOffsets', topic) as Promise<TopicInfo>,

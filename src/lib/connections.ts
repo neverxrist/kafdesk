@@ -6,13 +6,11 @@ export const THEME_KEY = 'kafdesk.theme'
 export const SIDEBAR_KEY = 'kafdesk.sidebarOpen'
 
 export type Theme = 'dark' | 'light'
-export type AuthMethodUi = 'none' | 'sasl' | 'keycloak' | 'oidc'
+export type AuthMethodUi = 'none' | 'sasl'
 
 export function authMethodFromConfig(c: ClusterConfig): AuthMethodUi {
-  if (c.authMode === 'oauthbearer') {
-    return c.sso?.providerId === 'oidc' ? 'oidc' : 'keycloak'
-  }
   if (c.authMode === 'sasl') return 'sasl'
+  // oauthbearer / legacy SSO configs fall back to "none" in the UI
   return 'none'
 }
 
@@ -20,19 +18,10 @@ export function defaultConnection(): ClusterConfig {
   return {
     id: crypto.randomUUID(),
     name: 'Local',
-    brokers: ['localhost:19092'],
+    brokers: ['localhost:9092'],
     clientId: 'kafdesk',
     ssl: false,
     authMode: 'none',
-    schemaRegistryUrl: 'http://localhost:18081',
-    sso: {
-      providerId: 'keycloak',
-      keycloak: {
-        url: '',
-        realm: '',
-        clientId: '',
-      },
-    },
   }
 }
 
