@@ -1,8 +1,11 @@
 import { app, BrowserWindow, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { UpdateSettings, UpdateStatus } from '../types'
+
+const RELEASES_URL = 'https://github.com/neverxrist/kafdesk/releases'
 
 let status: UpdateStatus = { state: 'idle' }
 let listeners = new Set<(s: UpdateStatus) => void>()
@@ -43,6 +46,44 @@ function emit(next: UpdateStatus) {
       /* ignore */
     }
   }
+}
+
+/**
+ * Squirrel.Mac / ShipIt refuses updates unless the .app has a real Developer ID
+ * signature. Ad-hoc / unsigned CI builds produce:
+ * "Code signature … did not pass validation: code resources are missing…"
+ */
+function hasDeveloperIdSignature(): boolean {
+  if (process.platform !== 'darwin') return true
+  try {
+    const r = spawnSync('codesign', ['-dv', '--verbose=4', process.execPath], {
+      encoding: 'utf8',
+    })
+    const out = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
+    return /Authority=Developer ID Application/i.test(out)
+  } catch {
+    return false
+  }
+}
+
+function macUnsignedStatus(): UpdateStatus {
+  return {
+    state: 'unsigned',
+    message: `Mac auto-update needs Apple Developer signing. Download DMG: ${RELEASES_URL}`,
+  }
+}
+
+function friendlyUpdateError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  if (
+    /code signature/i.test(raw) ||
+    /did not pass validation/i.test(raw) ||
+    /ресурса?ы? кода отсутствуют/i.test(raw) ||
+    /CodeResources/i.test(raw)
+  ) {
+    return `Mac update rejected (unsigned build). Install manually: ${RELEASES_URL}`
+  }
+  return raw
 }
 
 export function getUpdateStatus(): UpdateStatus {
@@ -88,7 +129,7 @@ function wire(win: BrowserWindow | null) {
     }
   })
   autoUpdater.on('error', (err) =>
-    emit({ state: 'error', message: err instanceof Error ? err.message : String(err) }),
+    emit({ state: 'error', message: friendlyUpdateError(err) }),
   )
 }
 
@@ -102,6 +143,10 @@ function clearTimers() {
 function schedule(win: BrowserWindow | null) {
   clearTimers()
   if (!app.isPackaged || !autoUpdateEnabled) return
+  if (!hasDeveloperIdSignature()) {
+    emit(macUnsignedStatus())
+    return
+  }
   wire(win)
   initialTimer = setTimeout(() => void checkForUpdates(win), 5_000)
   intervalTimer = setInterval(() => void checkForUpdates(win), 6 * 60 * 60 * 1000)
@@ -115,6 +160,9 @@ export function setAutoUpdate(enabled: boolean, win: BrowserWindow | null): Upda
     emit({ state: 'disabled' })
   } else if (!app.isPackaged) {
     emit({ state: 'dev' })
+  } else if (!hasDeveloperIdSignature()) {
+    clearTimers()
+    emit(macUnsignedStatus())
   } else {
     schedule(win)
     void checkForUpdates(win)
@@ -127,12 +175,16 @@ export async function checkForUpdates(win: BrowserWindow | null): Promise<Update
     emit({ state: 'dev', message: 'Updates are only available in packaged builds' })
     return status
   }
+  if (!hasDeveloperIdSignature()) {
+    emit(macUnsignedStatus())
+    return status
+  }
   wire(win)
   try {
     emit({ state: 'checking' })
     await autoUpdater.checkForUpdates()
   } catch (err) {
-    emit({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+    emit({ state: 'error', message: friendlyUpdateError(err) })
   }
   return status
 }
@@ -145,6 +197,10 @@ export function initAutoUpdate(win: BrowserWindow | null) {
   }
   if (!autoUpdateEnabled) {
     emit({ state: 'disabled' })
+    return
+  }
+  if (!hasDeveloperIdSignature()) {
+    emit(macUnsignedStatus())
     return
   }
   schedule(win)

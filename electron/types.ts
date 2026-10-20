@@ -195,6 +195,8 @@ export interface UpdateStatus {
     | 'error'
     | 'dev'
     | 'disabled'
+    /** macOS build without Developer ID — ShipIt cannot install updates */
+    | 'unsigned'
   version?: string
   percent?: number
   message?: string

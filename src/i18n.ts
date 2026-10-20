@@ -194,6 +194,8 @@ const dict = {
     updateDownloaded: 'Update {version} ready — restart app',
     updateNone: 'You are up to date',
     updateError: 'Update check failed',
+    updateUnsigned:
+      'Mac auto-update needs Apple code signing. Install the new DMG from GitHub Releases.',
     msgKey: 'key',
     msgOffset: 'offset',
     msgTs: 'ts',
@@ -398,6 +400,8 @@ const dict = {
     updateDownloaded: 'Обновление {version} готово — перезапусти приложение',
     updateNone: 'Установлена последняя версия',
     updateError: 'Не удалось проверить обновления',
+    updateUnsigned:
+      'На Mac автообновление без подписи Apple не работает. Поставь новый DMG с GitHub Releases.',
     msgKey: 'key',
     msgOffset: 'offset',
     msgTs: 'ts',

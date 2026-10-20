@@ -8,6 +8,8 @@ function updateText(tr: Tr, s: UpdateStatus): string {
   switch (s.state) {
     case 'dev':
       return tr('updateDev')
+    case 'unsigned':
+      return tr('updateUnsigned')
     case 'disabled':
       return tr('updateDisabled')
     case 'checking':
