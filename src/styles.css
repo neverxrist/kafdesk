@@ -194,23 +194,37 @@ textarea:focus {
   line-height: 1;
 }
 
+.topbar-conn-wrap {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+  max-width: 420px;
+}
+
 .topbar-conn {
   display: flex;
   align-items: center;
   gap: 0.55rem;
+  width: 100%;
   min-width: 0;
-  flex: 1;
   cursor: pointer;
-  padding: 0.25rem 0.35rem;
+  padding: 0.35rem 0.55rem;
   border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 
-.topbar-conn:hover {
+.topbar-conn:hover,
+.topbar-conn-wrap.open .topbar-conn {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: var(--border);
 }
 
 .topbar-conn-text {
   min-width: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
@@ -229,6 +243,80 @@ textarea:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.topbar-conn-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.topbar-conn-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.35rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  max-height: min(360px, 70vh);
+  overflow: auto;
+}
+
+.topbar-conn-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.topbar-conn-option:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.topbar-conn-option.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.topbar-conn-option-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.topbar-conn-option small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.topbar-conn-manage {
+  margin-top: 0.2rem;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-top: 1px dashed var(--border);
+  border-radius: 0 0 8px 8px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.topbar-conn-manage:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .topbar-controls {

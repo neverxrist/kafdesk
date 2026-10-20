@@ -3,6 +3,7 @@ export type Locale = 'en' | 'ru'
 const dict = {
   en: {
     connections: 'Connections',
+    manageConnections: 'Manage connections…',
     collapse: 'Collapse',
     expand: 'Expand',
     saved: 'Saved',
@@ -209,6 +210,7 @@ const dict = {
   },
   ru: {
     connections: 'Подключения',
+    manageConnections: 'Управление подключениями…',
     collapse: 'Свернуть',
     expand: 'Развернуть',
     saved: 'Сохранённые',

@@ -318,13 +318,23 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     persistProduceTemplates(next)
   }
 
-  function selectConnection(id: string) {
+  async function selectConnection(id: string) {
     if (id === activeId) return
-    if (connected) void disconnect()
+    const next = connections.find((c) => c.id === id)
+    if (!next) return
+    const wasConnected = connected
     setPendingDeleteId(null)
-    setActiveId(id)
     setPingInfo(null)
     setError(null)
+    if (wasConnected) {
+      await disconnect()
+    }
+    setActiveId(id)
+    setBrokersText(next.brokers.join(','))
+    // One live Kafka session only — drop old, reconnect to the chosen profile
+    if (wasConnected) {
+      await connectWith(next)
+    }
   }
 
   const detailsRef = useRef<HTMLDivElement>(null)
@@ -534,15 +544,13 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     }
   }
 
-  async function connect() {
-    if (!config) return
+  async function connectWith(target: ClusterConfig) {
     setBusy(true)
     setError(null)
     setPingInfo(null)
     try {
-      const next = draftConfig()
-      updateConfig(next)
-      const res = await window.kafdesk.connect(next)
+      setConnections((prev) => prev.map((c) => (c.id === target.id ? target : c)))
+      const res = await window.kafdesk.connect(target)
       setConnected(true)
       setSrStatus(res.schemaRegistry)
       if (res.schemaRegistry === 'fail' && res.schemaRegistryError) {
@@ -561,7 +569,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         setSubjects([])
       }
       setSidebarOpen(false)
-      pushLog('info', `Connected to ${next.brokers.join(',')} (${next.authMode || 'none'})`)
+      pushLog('info', `Connected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
@@ -571,6 +579,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     } finally {
       setBusy(false)
     }
+  }
+
+  async function connect() {
+    if (!config) return
+    await connectWith(draftConfig())
   }
 
   async function disconnect() {

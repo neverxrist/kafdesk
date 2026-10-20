@@ -63,10 +63,14 @@ export default function App() {
           setSidebarOpen={a.setSidebarOpen}
           onOpenSettings={() => a.setTab('settings')}
           settingsActive={a.tab === 'settings'}
+          connections={a.connections}
+          activeId={a.activeId}
+          onSelectConnection={a.selectConnection}
           config={a.config}
           connected={a.connected}
           srStatus={a.srStatus}
           authSession={a.authSession}
+          busy={a.busy}
         />
 
         <div className="tabs">

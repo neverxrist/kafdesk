@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import type { AuthSessionPublic, ClusterConfig, SchemaRegistryStatus } from '../../electron/types'
 import type { Theme } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
@@ -12,10 +13,14 @@ export default function TopBar({
   setSidebarOpen,
   onOpenSettings,
   settingsActive,
+  connections,
+  activeId,
+  onSelectConnection,
   config,
   connected,
   srStatus,
   authSession,
+  busy,
 }: {
   tr: Tr
   theme: Theme
@@ -24,11 +29,34 @@ export default function TopBar({
   setSidebarOpen: (v: boolean | ((prev: boolean) => boolean)) => void
   onOpenSettings: () => void
   settingsActive?: boolean
+  connections: ClusterConfig[]
+  activeId: string
+  onSelectConnection: (id: string) => void
   config: ClusterConfig
   connected: boolean
   srStatus: SchemaRegistryStatus
   authSession: AuthSessionPublic
+  busy?: boolean
 }) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onDoc(e: MouseEvent) {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
   return (
     <div className="topbar">
       <button
@@ -42,19 +70,68 @@ export default function TopBar({
         </span>
         {tr('connections')}
       </button>
-      <div className="topbar-conn" onClick={() => setSidebarOpen(true)} role="button">
-        <span className={`dot ${connected ? 'on' : ''}`} />
-        <div className="topbar-conn-text">
-          <strong>{config.name}</strong>
-          <small>
-            {connected
-              ? `${tr('online')} · ${srStatus === 'ok' ? tr('srOk') : srStatus === 'fail' ? tr('srFail') : tr('srNone')}`
-              : tr('offline')}
-            {authSession.loggedIn ? ` · SSO ${authSession.username || 'ok'}` : ''}
-            {config.brokers[0] ? ` · ${config.brokers[0]}` : ''}
-          </small>
-        </div>
+
+      <div className={`topbar-conn-wrap ${open ? 'open' : ''}`} ref={wrapRef}>
+        <button
+          type="button"
+          className="topbar-conn"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          disabled={busy}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className={`dot ${connected ? 'on' : ''}`} />
+          <div className="topbar-conn-text">
+            <strong>{config.name}</strong>
+            <small>
+              {connected
+                ? `${tr('online')} · ${srStatus === 'ok' ? tr('srOk') : srStatus === 'fail' ? tr('srFail') : tr('srNone')}`
+                : tr('offline')}
+              {authSession.loggedIn ? ` · SSO ${authSession.username || 'ok'}` : ''}
+              {config.brokers[0] ? ` · ${config.brokers[0]}` : ''}
+            </small>
+          </div>
+          <span className="topbar-conn-chevron" aria-hidden>
+            {open ? '▴' : '▾'}
+          </span>
+        </button>
+
+        {open && (
+          <div className="topbar-conn-menu" role="listbox" aria-label={tr('connections')}>
+            {connections.map((c) => {
+              const active = c.id === activeId
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`topbar-conn-option ${active ? 'active' : ''}`}
+                  disabled={busy}
+                  onClick={() => {
+                    setOpen(false)
+                    if (!active) void onSelectConnection(c.id)
+                  }}
+                >
+                  <span className="topbar-conn-option-name">{c.name}</span>
+                  <small>{c.brokers[0] || '—'}</small>
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              className="topbar-conn-manage"
+              onClick={() => {
+                setOpen(false)
+                setSidebarOpen(true)
+              }}
+            >
+              {tr('manageConnections')}
+            </button>
+          </div>
+        )}
       </div>
+
       <div className="topbar-controls">
         <button
           className={`icon-btn settings-btn ${settingsActive ? 'active' : ''}`}
