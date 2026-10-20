@@ -1,7 +1,7 @@
 {
   "name": "kafdesk",
   "productName": "KafDesk",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Friendly Kafka desktop client with Avro / JSON / String support",
   "author": "KafDesk contributors",
   "main": "dist-electron/main.js",

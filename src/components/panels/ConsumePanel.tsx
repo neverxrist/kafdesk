@@ -186,7 +186,7 @@ export function ConsumeToolbar({
           type="button"
           className="primary"
           disabled={!selectedTopic}
-          onClick={onLoadMessages}
+          onClick={() => onLoadMessages()}
           title={tr('refresh')}
         >
           {busy ? tr('loadingMessages') : tr('refresh')}

@@ -876,7 +876,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function loadMessages(topicName?: string, filterOverride?: ConsumeFilterState) {
-    const topic = topicName || selectedTopic
+    // Guard: never treat a click event (or other non-string) as a topic name
+    const topic = (typeof topicName === 'string' && topicName) || selectedTopic
     if (!topic) return
     cancelScheduledConsumeReload()
     const f = filterOverride ?? { ...filterStateRef.current }
