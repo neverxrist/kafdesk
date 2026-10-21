@@ -4,6 +4,11 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { UpdateSettings, UpdateStatus } from '../types'
+import {
+  checkAndDownloadMacDmg,
+  getPendingMacDmg,
+  installMacDmgAndRelaunch,
+} from './macDmgUpdater'
 
 const RELEASES_URL = 'https://github.com/neverxrist/kafdesk/releases'
 
@@ -49,9 +54,8 @@ function emit(next: UpdateStatus) {
 }
 
 /**
- * Squirrel.Mac / ShipIt refuses updates unless the .app has a real Developer ID
- * signature. Ad-hoc / unsigned CI builds produce:
- * "Code signature … did not pass validation: code resources are missing…"
+ * Squirrel.Mac / ShipIt needs a real Developer ID. Unsigned CI builds use the
+ * custom DMG updater instead (see macDmgUpdater.ts).
  */
 function hasDeveloperIdSignature(): boolean {
   if (process.platform !== 'darwin') return true
@@ -66,11 +70,8 @@ function hasDeveloperIdSignature(): boolean {
   }
 }
 
-function macUnsignedStatus(): UpdateStatus {
-  return {
-    state: 'unsigned',
-    message: `Mac auto-update needs Apple Developer signing. Download DMG: ${RELEASES_URL}`,
-  }
+function useMacDmgUpdater(): boolean {
+  return process.platform === 'darwin' && !hasDeveloperIdSignature()
 }
 
 function friendlyUpdateError(err: unknown): string {
@@ -81,7 +82,7 @@ function friendlyUpdateError(err: unknown): string {
     /ресурса?ы? кода отсутствуют/i.test(raw) ||
     /CodeResources/i.test(raw)
   ) {
-    return `Mac update rejected (unsigned build). Install manually: ${RELEASES_URL}`
+    return `Mac ShipIt update rejected. Try Check for updates again (DMG installer) or download: ${RELEASES_URL}`
   }
   return raw
 }
@@ -100,7 +101,7 @@ export function onUpdateStatus(fn: (s: UpdateStatus) => void): () => void {
   return () => listeners.delete(fn)
 }
 
-function wire(win: BrowserWindow | null) {
+function wireElectronUpdater(win: BrowserWindow | null) {
   if (wired) return
   wired = true
 
@@ -128,9 +129,7 @@ function wire(win: BrowserWindow | null) {
       if (res.response === 0) autoUpdater.quitAndInstall()
     }
   })
-  autoUpdater.on('error', (err) =>
-    emit({ state: 'error', message: friendlyUpdateError(err) }),
-  )
+  autoUpdater.on('error', (err) => emit({ state: 'error', message: friendlyUpdateError(err) }))
 }
 
 function clearTimers() {
@@ -143,13 +142,44 @@ function clearTimers() {
 function schedule(win: BrowserWindow | null) {
   clearTimers()
   if (!app.isPackaged || !autoUpdateEnabled) return
-  if (!hasDeveloperIdSignature()) {
-    emit(macUnsignedStatus())
-    return
-  }
-  wire(win)
   initialTimer = setTimeout(() => void checkForUpdates(win), 5_000)
   intervalTimer = setInterval(() => void checkForUpdates(win), 6 * 60 * 60 * 1000)
+}
+
+async function offerPendingMacInstall(win: BrowserWindow | null): Promise<UpdateStatus> {
+  const pending = getPendingMacDmg()
+  if (!pending) {
+    return status
+  }
+  emit({ state: 'downloaded', version: pending.version })
+  if (win && !win.isDestroyed()) {
+    const res = await dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'KafDesk update',
+      message: `KafDesk ${pending.version} is ready to install.`,
+      detail: 'Restart now to replace the app from the downloaded DMG.',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (res.response === 0) installMacDmgAndRelaunch(pending.path)
+  }
+  return status
+}
+
+async function runMacDmgCheck(win: BrowserWindow | null): Promise<UpdateStatus> {
+  const pending = getPendingMacDmg()
+  if (pending) return offerPendingMacInstall(win)
+  try {
+    return await checkAndDownloadMacDmg(emit, win)
+  } catch (err) {
+    const s: UpdateStatus = {
+      state: 'error',
+      message: err instanceof Error ? err.message : String(err),
+    }
+    emit(s)
+    return s
+  }
 }
 
 export function setAutoUpdate(enabled: boolean, win: BrowserWindow | null): UpdateSettings {
@@ -160,9 +190,6 @@ export function setAutoUpdate(enabled: boolean, win: BrowserWindow | null): Upda
     emit({ state: 'disabled' })
   } else if (!app.isPackaged) {
     emit({ state: 'dev' })
-  } else if (!hasDeveloperIdSignature()) {
-    clearTimers()
-    emit(macUnsignedStatus())
   } else {
     schedule(win)
     void checkForUpdates(win)
@@ -175,15 +202,20 @@ export async function checkForUpdates(win: BrowserWindow | null): Promise<Update
     emit({ state: 'dev', message: 'Updates are only available in packaged builds' })
     return status
   }
-  if (!hasDeveloperIdSignature()) {
-    emit(macUnsignedStatus())
-    return status
+
+  if (useMacDmgUpdater()) {
+    return runMacDmgCheck(win)
   }
-  wire(win)
+
+  wireElectronUpdater(win)
   try {
     emit({ state: 'checking' })
     await autoUpdater.checkForUpdates()
   } catch (err) {
+    // Fall back to DMG path if ShipIt/signing blows up on Mac
+    if (process.platform === 'darwin') {
+      return runMacDmgCheck(win)
+    }
     emit({ state: 'error', message: friendlyUpdateError(err) })
   }
   return status
@@ -199,9 +231,11 @@ export function initAutoUpdate(win: BrowserWindow | null) {
     emit({ state: 'disabled' })
     return
   }
-  if (!hasDeveloperIdSignature()) {
-    emit(macUnsignedStatus())
-    return
+  if (useMacDmgUpdater()) {
+    emit({
+      state: 'idle',
+      message: `Unsigned Mac build — updates via DMG from ${RELEASES_URL}`,
+    })
   }
   schedule(win)
 }

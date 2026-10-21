@@ -203,7 +203,7 @@ export interface UpdateStatus {
     | 'error'
     | 'dev'
     | 'disabled'
-    /** macOS build without Developer ID — ShipIt cannot install updates */
+    /** Legacy: unsigned Mac now uses DMG updater; kept for UI compat */
     | 'unsigned'
   version?: string
   percent?: number

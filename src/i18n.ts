@@ -204,7 +204,8 @@ const dict = {
     appearance: 'Appearance',
     language: 'Language',
     autoUpdate: 'Auto-update',
-    autoUpdateHint: 'Check GitHub Releases on start and every 6 hours. Manual check works anyway.',
+    autoUpdateHint:
+      'Check GitHub Releases on start and every 6 hours. On unsigned Mac builds, updates download the DMG and replace the app on restart.',
     updateDisabled: 'Auto-update is off',
     moreFilters: 'More filters',
     moreFiltersActive: 'More filters · {n}',
@@ -239,7 +240,7 @@ const dict = {
     updateNone: 'You are up to date',
     updateError: 'Update check failed',
     updateUnsigned:
-      'Mac auto-update needs Apple code signing. Install the new DMG from GitHub Releases.',
+      'Unsigned Mac build: updates download the DMG and replace the app on restart (no Apple signing).',
     msgKey: 'key',
     msgOffset: 'offset',
     msgTs: 'ts',
@@ -454,7 +455,8 @@ const dict = {
     appearance: 'Оформление',
     language: 'Язык',
     autoUpdate: 'Автообновление',
-    autoUpdateHint: 'Проверять GitHub Releases при старте и каждые 6 часов. Ручная проверка работает всегда.',
+    autoUpdateHint:
+      'Проверять GitHub Releases при старте и каждые 6 часов. На unsigned Mac обновление скачает DMG и заменит приложение при рестарте.',
     updateDisabled: 'Автообновление выключено',
     moreFilters: 'Ещё фильтры',
     moreFiltersActive: 'Ещё фильтры · {n}',
@@ -489,7 +491,7 @@ const dict = {
     updateNone: 'Установлена последняя версия',
     updateError: 'Не удалось проверить обновления',
     updateUnsigned:
-      'На Mac автообновление без подписи Apple не работает. Поставь новый DMG с GitHub Releases.',
+      'Unsigned Mac: обновление скачает DMG и заменит приложение при перезапуске (без подписи Apple).',
     msgKey: 'key',
     msgOffset: 'offset',
     msgTs: 'ts',

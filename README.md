@@ -28,7 +28,7 @@ xattr -cr /Applications/KafDesk.app
 open /Applications/KafDesk.app
 ```
 
-Auto-update on Mac also needs a signed build — until then, install new versions from Releases manually.
+**Updates (unsigned Mac):** the app can download the new DMG from Releases, replace `KafDesk.app` on restart, and relaunch (custom updater — no Apple Developer ID). First open of a brand-new install may still need Gatekeeper steps above.
 
 ## Dev
 

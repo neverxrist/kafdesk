@@ -24,6 +24,8 @@ function updateText(tr: Tr, s: UpdateStatus): string {
       return `${tr('updateChecking')} ${s.percent ?? 0}%`
     case 'error':
       return `${tr('updateError')}${s.message ? `: ${s.message}` : ''}`
+    case 'idle':
+      return s.message ? s.message : ''
     default:
       return tr('updateNone')
   }
