@@ -33,6 +33,7 @@ process.env.VITE_PUBLIC = app.isPackaged
 app.setName('KafDesk')
 
 let win: BrowserWindow | null = null
+let splash: BrowserWindow | null = null
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 
 function resolveAppIcon(): string | undefined {
@@ -44,6 +45,54 @@ function resolveAppIcon(): string | undefined {
         path.join(__dirname, '../public/icon.png'),
       ]
   return candidates.find((p) => Boolean(p) && fs.existsSync(p))
+}
+
+function resolveSplashHtml(): string | undefined {
+  const candidates = app.isPackaged
+    ? [path.join(process.env.DIST!, 'splash.html')]
+    : [
+        path.join(process.env.VITE_PUBLIC || '', 'splash.html'),
+        path.join(__dirname, '../public/splash.html'),
+      ]
+  return candidates.find((p) => Boolean(p) && fs.existsSync(p))
+}
+
+/** Lightweight splash while Chromium/React boot — cannot cover Gatekeeper delay before process start. */
+function createSplash(): BrowserWindow | null {
+  const html = resolveSplashHtml()
+  if (!html) return null
+  const icon = resolveAppIcon()
+  const w = new BrowserWindow({
+    width: 280,
+    height: 280,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#0f1419',
+    hasShadow: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: true,
+    center: true,
+    ...(icon ? { icon } : {}),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  void w.loadFile(html)
+  return w
+}
+
+function closeSplash(): void {
+  if (splash && !splash.isDestroyed()) {
+    splash.close()
+  }
+  splash = null
 }
 
 /** macOS copies quarantined apps to a random path — feels laggy vs a local build. */
@@ -115,10 +164,13 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     win?.show()
+    closeSplash()
   })
 
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error('did-fail-load', { code, desc, url })
+    closeSplash()
+    win?.show()
   })
 
   if (VITE_DEV_SERVER_URL) {
@@ -274,6 +326,10 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  splash = createSplash()
+  // Safety: never leave splash stuck if ready-to-show is missed
+  setTimeout(() => closeSplash(), 12_000)
+
   authService.loadFromDisk()
   registerIpc()
   createWindow()
@@ -286,11 +342,16 @@ app.whenReady().then(() => {
   })
   initAutoUpdate(win)
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      splash = createSplash()
+      setTimeout(() => closeSplash(), 12_000)
+      createWindow()
+    }
   })
 })
 
 app.on('window-all-closed', async () => {
+  closeSplash()
   await kafkaService.disconnect()
   if (process.platform !== 'darwin') app.quit()
 })

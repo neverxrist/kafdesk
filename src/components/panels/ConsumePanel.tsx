@@ -4,6 +4,7 @@ import MessageCard from '../MessageCard'
 import MessageDiffPanel from '../MessageDiffPanel'
 import type { useLocale } from '../../hooks/useLocale'
 import type { SavedConsumeQuery } from '../../lib/savedQueries'
+import { RefreshIcon } from '../ConnActionIcons'
 import { messageId } from '../../lib/messageText'
 import {
   loadGroupByPartitions,
@@ -195,114 +196,124 @@ export function ConsumeToolbar({
         </button>
         <button
           type="button"
-          className="primary"
-          disabled={!selectedTopic}
+          className={`primary toolbar-refresh-btn${busy ? ' busy' : ''}`}
+          disabled={!selectedTopic || busy}
           onClick={() => onLoadMessages()}
-          title={tr('refresh')}
+          title={busy ? tr('loadingMessages') : tr('refresh')}
+          aria-label={busy ? tr('loadingMessages') : tr('refresh')}
         >
-          {busy ? tr('loadingMessages') : tr('refresh')}
+          <RefreshIcon />
         </button>
       </div>
 
       {showAdvanced && (
-      <div className="toolbar-row toolbar-row-filters">
-        <div className="field">
-          <label>{tr('headerKey')}</label>
-          <input
-            value={headerKey}
-            maxLength={FILTER_MAX}
-            onChange={(e) => setHeaderKey(e.target.value.slice(0, FILTER_MAX))}
-            placeholder={tr('headerKeyPh')}
-            disabled={!selectedTopic}
-          />
-        </div>
-        <div className="field">
-          <label>{tr('headerValue')}</label>
-          <input
-            value={headerValue}
-            maxLength={FILTER_MAX}
-            onChange={(e) => setHeaderValue(e.target.value.slice(0, FILTER_MAX))}
-            placeholder={tr('headerValuePh')}
-            disabled={!selectedTopic}
-          />
-        </div>
-        <div className="field" style={{ minWidth: 190 }}>
-          <label>{tr('timeFrom')}</label>
-          <input
-            type="datetime-local"
-            value={timeFrom}
-            onChange={(e) => setTimeFrom(e.target.value)}
-            disabled={!selectedTopic}
-          />
-        </div>
-        <div className="field" style={{ minWidth: 190 }}>
-          <label>{tr('timeTo')}</label>
-          <input
-            type="datetime-local"
-            value={timeTo}
-            onChange={(e) => setTimeTo(e.target.value)}
-            disabled={!selectedTopic}
-          />
-        </div>
-        {(timeFrom || timeTo) && (
-          <button
-            type="button"
-            onClick={() => {
-              setTimeFrom('')
-              setTimeTo('')
-            }}
-          >
-            ×
-          </button>
-        )}
-        <div className="field saved-queries-field">
-          <label>{tr('savedQueries')}</label>
-          <div className="saved-queries-row">
-            <select value={savedId} onChange={(e) => setSavedId(e.target.value)}>
-              <option value="">{savedQueries.length ? tr('selectQuery') : tr('noSavedQueries')}</option>
-              {savedQueries.map((q) => (
-                <option key={q.id} value={q.id}>
-                  {q.name}
-                  {q.topic ? ` · ${q.topic}` : ''}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              disabled={!savedId || busy}
-              onClick={() => onApplyQuery(savedId)}
-            >
-              {tr('applyQuery')}
-            </button>
-            <button
-              type="button"
-              disabled={!savedId}
-              onClick={() => {
-                onDeleteQuery(savedId)
-                setSavedId('')
-              }}
-            >
-              {tr('deleteQuery')}
-            </button>
-            <input
-              value={queryName}
-              onChange={(e) => setQueryName(e.target.value)}
-              placeholder={tr('queryNamePh')}
-              disabled={!selectedTopic}
-            />
-            <button
-              type="button"
-              disabled={!queryName.trim() || !selectedTopic}
-              onClick={() => {
-                onSaveQuery(queryName)
-                setQueryName('')
-              }}
-            >
-              {tr('saveQuery')}
-            </button>
+        <div className="toolbar-advanced">
+          <div className="toolbar-row toolbar-row-filters">
+            <div className="field">
+              <label>{tr('headerKey')}</label>
+              <input
+                value={headerKey}
+                maxLength={FILTER_MAX}
+                onChange={(e) => setHeaderKey(e.target.value.slice(0, FILTER_MAX))}
+                placeholder={tr('headerKeyPh')}
+                disabled={!selectedTopic}
+              />
+            </div>
+            <div className="field">
+              <label>{tr('headerValue')}</label>
+              <input
+                value={headerValue}
+                maxLength={FILTER_MAX}
+                onChange={(e) => setHeaderValue(e.target.value.slice(0, FILTER_MAX))}
+                placeholder={tr('headerValuePh')}
+                disabled={!selectedTopic}
+              />
+            </div>
+            <div className="field toolbar-time-field">
+              <label>{tr('timeFrom')}</label>
+              <input
+                type="datetime-local"
+                value={timeFrom}
+                onChange={(e) => setTimeFrom(e.target.value)}
+                disabled={!selectedTopic}
+              />
+            </div>
+            <div className="field toolbar-time-field">
+              <label>{tr('timeTo')}</label>
+              <input
+                type="datetime-local"
+                value={timeTo}
+                onChange={(e) => setTimeTo(e.target.value)}
+                disabled={!selectedTopic}
+              />
+            </div>
+            {(timeFrom || timeTo) && (
+              <button
+                type="button"
+                className="toolbar-clear-time"
+                onClick={() => {
+                  setTimeFrom('')
+                  setTimeTo('')
+                }}
+                title={tr('clear')}
+                aria-label={tr('clear')}
+              >
+                ×
+              </button>
+            )}
+          </div>
+          <div className="saved-queries-block">
+            <div className="field saved-queries-field">
+              <label>{tr('savedQueries')}</label>
+              <div className="saved-queries-grid">
+                <select value={savedId} onChange={(e) => setSavedId(e.target.value)}>
+                  <option value="">
+                    {savedQueries.length ? tr('selectQuery') : tr('noSavedQueries')}
+                  </option>
+                  {savedQueries.map((q) => (
+                    <option key={q.id} value={q.id}>
+                      {q.name}
+                      {q.topic ? ` · ${q.topic}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!savedId || busy}
+                  onClick={() => onApplyQuery(savedId)}
+                >
+                  {tr('applyQuery')}
+                </button>
+                <button
+                  type="button"
+                  disabled={!savedId}
+                  onClick={() => {
+                    onDeleteQuery(savedId)
+                    setSavedId('')
+                  }}
+                >
+                  {tr('deleteQuery')}
+                </button>
+                <input
+                  value={queryName}
+                  onChange={(e) => setQueryName(e.target.value)}
+                  placeholder={tr('queryNamePh')}
+                  disabled={!selectedTopic}
+                />
+                <button
+                  type="button"
+                  disabled={!queryName.trim() || !selectedTopic}
+                  onClick={() => {
+                    onSaveQuery(queryName)
+                    setQueryName('')
+                  }}
+                >
+                  {tr('saveQuery')}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
       )}
     </div>
   )

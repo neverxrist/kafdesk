@@ -50,6 +50,28 @@ export function ReconnectIcon() {
   )
 }
 
+export function RefreshIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M13.2 8A5.2 5.2 0 1 1 11.4 3.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M11.2 2.2v2.6h2.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 export function EditIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
