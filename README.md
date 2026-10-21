@@ -1,6 +1,6 @@
 # KafDesk
 
-Desktop Kafka client (Electron) for Avro / JSON / String.
+Desktop Kafka client (**Tauri 2** + Rust librdkafka) for Avro / JSON / String.
 
 ## Features
 
@@ -9,7 +9,7 @@ Desktop Kafka client (Electron) for Avro / JSON / String.
 - Filters, saved queries, message diff, republish, produce templates
 - Consumer groups, lag, manual offsets
 - Schema Registry subjects
-- Theme, EN/RU, auto-update
+- Theme, EN/RU, Mac DMG updates
 
 ## Install
 
@@ -17,35 +17,26 @@ Installers: [GitHub Releases](https://github.com/neverxrist/kafdesk/releases).
 
 ### macOS (unsigned builds)
 
-CI builds are not Apple Developer–signed / notarized yet. Gatekeeper quarantine on a ~100MB Electron app makes the **first** open very slow (or shows “Apple could not verify…”).
-
-**Fast path (recommended):**
-
-1. Drag `KafDesk.app` from the DMG into Applications → **Replace**.
-2. Double-click **Finish Install** on the DMG (or run `xattr -cr /Applications/KafDesk.app` in Terminal).
-3. That clears quarantine and opens the app.
-
-**Manual:**
+CI/local builds may not be Apple Developer–signed. If Gatekeeper blocks:
 
 ```bash
 xattr -cr /Applications/KafDesk.app
 open /Applications/KafDesk.app
 ```
 
-If macOS still blocks: **System Settings → Privacy & Security → Open Anyway**.
+Or **System Settings → Privacy & Security → Open Anyway**.
 
-**Updates:** like DBeaver — download DMG → open & quit → drag to Applications → run **Finish Install** (settings stay in user data).
+**Updates:** download DMG → open & quit → drag to Applications → Replace (settings stay in user data).
 
 ## Dev
 
+Needs Node 22+, Rust, and cmake (for librdkafka). Portable cmake can live under `src-tauri/.tools/cmake/` — `npm run tauri:*` injects PATH via `scripts/with-cmake.mjs`.
+
 ```bash
 npm install
-npm run dev
+npm run tauri:dev
 ```
 
 ```bash
-npm run build:mac     # macOS
-npm run build:win     # Windows
-npm run build:linux   # Linux (AppImage + deb)
+npm run build:mac     # .app + .dmg under src-tauri/target/release/bundle/
 ```
-

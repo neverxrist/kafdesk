@@ -8,7 +8,7 @@ import type {
   SchemaSubjectInfo,
   SchemaRegistryStatus,
   TopicInfo,
-} from '../../electron/types'
+} from '../types/kafdesk'
 import { LOCALE_KEY, t } from '../i18n'
 import {
   authMethodFromConfig,
@@ -136,9 +136,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [groupOffsets, setGroupOffsets] = useState<GroupOffsetEntry[]>([])
   const [movePartition, setMovePartition] = useState('0')
   const [moveOffset, setMoveOffset] = useState('0')
-  const [lagSummary, setLagSummary] = useState<import('../../electron/types').LagSummaryResult | null>(null)
+  const [lagSummary, setLagSummary] = useState<import('../types/kafdesk').LagSummaryResult | null>(null)
   const [lagAutoRefresh, setLagAutoRefresh] = useState(true)
-  const [updateStatus, setUpdateStatus] = useState<import('../../electron/types').UpdateStatus>({
+  const [updateStatus, setUpdateStatus] = useState<import('../types/kafdesk').UpdateStatus>({
     state: 'idle',
   })
   const [updateAuto, setUpdateAuto] = useState(false)
@@ -475,7 +475,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     try {
       const session = await window.kafdesk.authLogin(request)
       setAuthSession(session)
-      updateConfig({ authMode: 'oauthbearer' })
+      // Kafka OAUTHBEARER removed — SSO is password-grant session only (not broker auth).
       setPingInfo(`SSO ok · ${session.username || session.email || 'user'}`)
       pushLog('info', `SSO login ok · ${session.username || session.email || 'user'}`)
       void refreshStoredCreds()
@@ -489,13 +489,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function ssoLogin() {
-    if (!config?.sso) return
-    await runSsoLogin({
-      providerId: config.sso.providerId || 'keycloak',
-      method: 'browser',
-      keycloak: config.sso.keycloak,
-      oidc: config.sso.oidc,
-    })
+    // Browser PKCE removed — password grant only.
+    setError('Browser SSO removed — use password login')
+    pushLog('error', 'Browser SSO / PKCE removed')
   }
 
   async function ssoPasswordLogin(username: string, password: string, remember: boolean) {
@@ -526,7 +522,6 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     try {
       await window.kafdesk.authLogout()
       setAuthSession({ providerId: config?.sso?.providerId || 'keycloak', loggedIn: false })
-      if (config?.authMode === 'oauthbearer') updateConfig({ authMode: 'none' })
       setPingInfo('SSO logged out')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

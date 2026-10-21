@@ -1,4 +1,4 @@
-import type { ConsumeStartFrom } from '../../electron/types'
+import type { ConsumeStartFrom } from '../types/kafdesk'
 
 export interface ConsumeFilterState {
   search: string

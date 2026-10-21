@@ -1,4 +1,4 @@
-import type { ConsumeStartFrom } from '../../electron/types'
+import type { ConsumeStartFrom } from '../types/kafdesk'
 
 export const SAVED_QUERIES_KEY = 'kafdesk.savedQueries.v1'
 

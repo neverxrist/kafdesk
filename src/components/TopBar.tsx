@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AuthSessionPublic, ClusterConfig, SchemaRegistryStatus } from '../../electron/types'
+import type { AuthSessionPublic, ClusterConfig, SchemaRegistryStatus } from '../types/kafdesk'
 import type { Theme } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
 import { ConnectIcon, ReconnectIcon } from './ConnActionIcons'

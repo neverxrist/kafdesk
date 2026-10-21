@@ -1,4 +1,4 @@
-import type { KafkaMessageView } from '../../electron/types'
+import type { KafkaMessageView } from '../types/kafdesk'
 import { timeInputToMs } from './savedQueries'
 
 export interface ClientMessageFilter {

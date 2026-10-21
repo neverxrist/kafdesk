@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { UpdateStatus } from '../../../electron/types'
+import type { UpdateStatus } from '../../types/kafdesk'
 import type { Theme } from '../../lib/connections'
 import type { useLocale } from '../../hooks/useLocale'
 

@@ -70,7 +70,7 @@ function concretePrimitive(prim: string): unknown {
     case 'double':
       return Math.round(Math.random() * 1000) / 10
     case 'bytes':
-      return Buffer.from('kafdesk').toString('base64')
+      return btoa('kafdesk')
     case 'string':
       return `${pick(FIRST).toLowerCase()}.${pick(LAST).toLowerCase()}@example.com`
     default:
@@ -136,7 +136,9 @@ function mockFromType(
 
     if (t === 'fixed') {
       const size = Number(obj.size) || 4
-      return template ? '{{uuid}}' : Buffer.alloc(size, 1).toString('base64')
+      return template
+        ? '{{uuid}}'
+        : btoa(String.fromCharCode(...Array.from({ length: size }, () => 1)))
     }
 
     if (obj.logicalType === 'uuid' || /uuid/i.test(String(obj.name || ''))) {

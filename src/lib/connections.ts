@@ -1,4 +1,4 @@
-import type { ClusterConfig } from '../../electron/types'
+import type { ClusterConfig } from '../types/kafdesk'
 
 export const CONNECTIONS_KEY = 'kafdesk.connections.v1'
 export const LEGACY_KEY = 'kafdesk.connection.v1'

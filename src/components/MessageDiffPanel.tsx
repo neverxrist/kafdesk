@@ -1,4 +1,4 @@
-import type { KafkaMessageView } from '../../electron/types'
+import type { KafkaMessageView } from '../types/kafdesk'
 import { messageBodyText } from '../lib/messageText'
 import type { useLocale } from '../hooks/useLocale'
 

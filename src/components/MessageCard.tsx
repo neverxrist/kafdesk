@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
-import type { KafkaMessageView } from '../../electron/types'
+import type { KafkaMessageView } from '../types/kafdesk'
 import { formatBadgeLabel, formatMessageDateTime } from '../lib/format'
 import { highlightMessageBody } from '../lib/jsonHighlight'
 import { messageId } from '../lib/messageText'

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { KafDeskApi } from '../electron/preload'
+import type { KafDeskApi } from './lib/kafdeskApi'
 
 declare global {
   interface Window {

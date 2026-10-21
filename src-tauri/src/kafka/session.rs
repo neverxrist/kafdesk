@@ -1,0 +1,383 @@
+use crate::avro_codec::decode_datum_to_json;
+use super::decode::{
+    decode_owned_message, decode_with_avro_json,
+    strip_confluent_wire,
+};
+use crate::sr::SchemaRegistryClient;
+use crate::types::*;
+use rdkafka::admin::AdminClient;
+use rdkafka::client::DefaultClientContext;
+#[allow(unused_imports)]
+use rdkafka::config::{ClientConfig, FromClientConfig, RDKafkaLogLevel};
+use rdkafka::consumer::{BaseConsumer, Consumer, StreamConsumer};
+use rdkafka::producer::FutureProducer;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
+
+pub(crate) type Admin = AdminClient<DefaultClientContext>;
+pub(crate) type Producer = FutureProducer;
+pub(crate) type BConsumer = BaseConsumer;
+pub(crate) type SConsumer = StreamConsumer;
+
+pub struct KafkaSession {
+    pub config: Option<ClusterConfig>,
+    pub(crate) producer: Option<Producer>,
+    pub(crate) admin: Option<Admin>,
+    pub(crate) brokers: String,
+    pub(crate) client_id: String,
+    pub(crate) base_config: ClientConfig,
+    pub(crate) registry: Option<SchemaRegistryClient>,
+    pub(crate) sr_status: String,
+    pub(crate) sr_error: Option<String>,
+    pub(crate) tailing: Arc<AtomicBool>,
+    pub(crate) tail_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl KafkaSession {
+    pub fn new() -> Self {
+        Self {
+            config: None,
+            producer: None,
+            admin: None,
+            brokers: String::new(),
+            client_id: "kafdesk".into(),
+            base_config: ClientConfig::new(),
+            registry: None,
+            sr_status: "none".into(),
+            sr_error: None,
+            tailing: Arc::new(AtomicBool::new(false)),
+            tail_task: Mutex::new(None),
+        }
+    }
+    pub(crate) fn make_consumer(&self, group_prefix: &str) -> Result<BConsumer, String> {
+        let mut c = self.base_config.clone();
+        c.set("group.id", format!("{group_prefix}-{}", uuid::Uuid::new_v4()));
+        c.set("enable.auto.commit", "false");
+        c.create::<BConsumer>().map_err(|e| e.to_string())
+    }
+    pub async fn connect(
+        &mut self,
+        config: ClusterConfig,
+    ) -> Result<ConnectResult, String> {
+        self.disconnect().await;
+
+        let base = super::config::build_client_config(&config)?;
+        let brokers = config.brokers.join(",");
+        let client_id = config
+            .client_id
+            .clone()
+            .unwrap_or_else(|| "kafdesk".into());
+
+        let producer: Producer = base.create().map_err(|e| format!("producer: {e}"))?;
+        let admin: Admin = base.create().map_err(|e| format!("admin: {e}"))?;
+
+        let mut probe_cfg = base.clone();
+        probe_cfg.set(
+            "group.id",
+            format!("kafdesk-probe-{}", uuid::Uuid::new_v4()),
+        );
+        probe_cfg.set("enable.auto.commit", "false");
+        let consumer: BConsumer = probe_cfg
+            .create()
+            .map_err(|e| format!("probe consumer: {e}"))?;
+        consumer
+            .fetch_metadata(None, Duration::from_secs(10))
+            .map_err(|e| format!("Kafka metadata: {e}"))?;
+
+        let mut sr_status = "none".to_string();
+        let mut sr_error = None;
+        let mut registry = None;
+        if let Some(ref url) = config.schema_registry_url {
+            if !url.trim().is_empty() {
+                match SchemaRegistryClient::new(&config) {
+                    Ok(client) => match client.probe().await {
+                        Ok(_) => {
+                            sr_status = "ok".into();
+                            registry = Some(client);
+                        }
+                        Err(e) => {
+                            sr_status = "fail".into();
+                            sr_error = Some(e);
+                            // Keep client so UI can retry list/probe; encode/decode gated on sr_status.
+                            registry = Some(client);
+                        }
+                    },
+                    Err(e) => {
+                        sr_status = "fail".into();
+                        sr_error = Some(e);
+                    }
+                }
+            }
+        }
+
+        self.config = Some(config);
+        self.producer = Some(producer);
+        self.admin = Some(admin);
+        self.brokers = brokers;
+        self.client_id = client_id;
+        self.base_config = base;
+        self.registry = registry;
+        self.sr_status = sr_status.clone();
+        self.sr_error = sr_error.clone();
+
+        Ok(ConnectResult {
+            ok: true,
+            schema_registry: sr_status,
+            schema_registry_error: sr_error,
+        })
+    }
+    pub async fn disconnect(&mut self) {
+        self.stop_tail().await;
+        self.producer = None;
+        self.admin = None;
+        self.registry = None;
+        self.config = None;
+        self.sr_status = "none".into();
+        self.sr_error = None;
+    }
+    pub fn is_connected(&self) -> bool {
+        self.admin.is_some() && self.producer.is_some()
+    }
+    pub fn sr_status(&self) -> String {
+        self.sr_status.clone()
+    }
+    pub async fn ping(&self) -> Result<PingResult, String> {
+        self.ensure_admin()?;
+        let started = Instant::now();
+        let consumer = self.make_consumer("kafdesk-ping")?;
+        let kafka = match consumer.fetch_metadata(None, Duration::from_secs(8)) {
+            Ok(_) => ProbePart {
+                ok: true,
+                ms: Some(started.elapsed().as_millis() as u64),
+                error: None,
+            },
+            Err(e) => ProbePart {
+                ok: false,
+                ms: Some(started.elapsed().as_millis() as u64),
+                error: Some(e.to_string()),
+            },
+        };
+        let schema_registry = if let Some(ref reg) = self.registry {
+            let t0 = Instant::now();
+            match reg.probe().await {
+                Ok(_) => SrProbe {
+                    status: "ok".into(),
+                    ms: Some(t0.elapsed().as_millis() as u64),
+                    error: None,
+                },
+                Err(e) => SrProbe {
+                    status: "fail".into(),
+                    ms: Some(t0.elapsed().as_millis() as u64),
+                    error: Some(e),
+                },
+            }
+        } else {
+            SrProbe {
+                status: "none".into(),
+                ms: None,
+                error: None,
+            }
+        };
+        Ok(PingResult {
+            kafka,
+            schema_registry,
+        })
+    }
+    pub async fn probe(config: ClusterConfig) -> Result<PingResult, String> {
+        let mut tmp = KafkaSession::new();
+        match tmp.connect(config).await {
+            Ok(_) => {
+                let r = tmp.ping().await;
+                tmp.disconnect().await;
+                r
+            }
+            Err(e) => Ok(PingResult {
+                kafka: ProbePart {
+                    ok: false,
+                    ms: None,
+                    error: Some(e),
+                },
+                schema_registry: SrProbe {
+                    status: "none".into(),
+                    ms: None,
+                    error: None,
+                },
+            }),
+        }
+    }
+    pub(crate) fn ensure_admin(&self) -> Result<(), String> {
+        if self.admin.is_none() {
+            return Err("Not connected to Kafka".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn ensure_producer(&self) -> Result<(), String> {
+        if self.producer.is_none() {
+            return Err("Not connected to Kafka".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn metadata_consumer(&self) -> Result<BConsumer, String> {
+        self.make_consumer("kafdesk-meta")
+    }
+    pub fn list_topics(&self) -> Result<Vec<TopicInfo>, String> {
+        self.ensure_admin()?;
+        let consumer = self.metadata_consumer()?;
+        let meta = consumer
+            .fetch_metadata(None, Duration::from_secs(15))
+            .map_err(|e| e.to_string())?;
+        let mut topics: Vec<TopicInfo> = meta
+            .topics()
+            .iter()
+            .filter(|t| !t.name().starts_with("__"))
+            .map(|t| TopicInfo {
+                name: t.name().to_string(),
+                partitions: {
+                    let mut parts: Vec<_> = t
+                        .partitions()
+                        .iter()
+                        .map(|p| PartitionInfo {
+                            partition_id: p.id(),
+                            leader: p.leader(),
+                            replicas: p.replicas().to_vec(),
+                            isr: p.isr().to_vec(),
+                            offset_low: None,
+                            offset_high: None,
+                            approx_messages: None,
+                        })
+                        .collect();
+                    parts.sort_by_key(|p| p.partition_id);
+                    parts
+                },
+                approx_messages: None,
+            })
+            .collect();
+        topics.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(topics)
+    }
+    pub fn get_topic_offsets(&self, topic: &str) -> Result<TopicInfo, String> {
+        self.ensure_admin()?;
+        let consumer = self.metadata_consumer()?;
+        let meta = consumer
+            .fetch_metadata(Some(topic), Duration::from_secs(15))
+            .map_err(|e| e.to_string())?;
+        let tmeta = meta
+            .topics()
+            .iter()
+            .find(|t| t.name() == topic)
+            .ok_or_else(|| format!("Topic not found: {topic}"))?;
+
+        let mut partitions = Vec::new();
+        let mut approx_total = 0i64;
+        for p in tmeta.partitions() {
+            let (low, high) = consumer
+                .fetch_watermarks(topic, p.id(), Duration::from_secs(8))
+                .map_err(|e| format!("watermarks {topic}/{}: {e}", p.id()))?;
+            let approx = (high - low).max(0);
+            approx_total += approx;
+            partitions.push(PartitionInfo {
+                partition_id: p.id(),
+                leader: p.leader(),
+                replicas: p.replicas().to_vec(),
+                isr: p.isr().to_vec(),
+                offset_low: Some(low.to_string()),
+                offset_high: Some(high.to_string()),
+                approx_messages: Some(approx),
+            });
+        }
+        partitions.sort_by_key(|p| p.partition_id);
+        Ok(TopicInfo {
+            name: topic.to_string(),
+            partitions,
+            approx_messages: Some(approx_total),
+        })
+    }
+    pub(crate) async fn decode_message_view(
+        &self,
+        topic: &str,
+        partition: i32,
+        offset: i64,
+        timestamp_ms: i64,
+        key: Option<&[u8]>,
+        payload: Option<&[u8]>,
+        headers: HashMap<String, String>,
+    ) -> KafkaMessageView {
+        if self.sr_status != "ok" {
+            return decode_owned_message(topic, partition, offset, timestamp_ms, key, payload, headers);
+        }
+        if let (Some(reg), Some(buf)) = (&self.registry, payload) {
+            if let Some((id, body)) = strip_confluent_wire(buf) {
+                match reg.get_schema_by_id(id).await {
+                    Ok(schema_str) => match decode_datum_to_json(&schema_str, body) {
+                        Ok(json) => {
+                            return decode_with_avro_json(
+                                topic,
+                                partition,
+                                offset,
+                                timestamp_ms,
+                                key,
+                                payload,
+                                headers,
+                                Some(json),
+                            );
+                        }
+                        Err(err) => {
+                            let mut view = decode_owned_message(
+                                topic,
+                                partition,
+                                offset,
+                                timestamp_ms,
+                                key,
+                                payload,
+                                headers,
+                            );
+                            view.format = "avro".into();
+                            view.schema_id = Some(id);
+                            view.value = serde_json::json!({
+                                "_decodeError": err,
+                                "raw": view.raw_preview,
+                            });
+                            return view;
+                        }
+                    },
+                    Err(err) => {
+                        let mut view = decode_owned_message(
+                            topic,
+                            partition,
+                            offset,
+                            timestamp_ms,
+                            key,
+                            payload,
+                            headers,
+                        );
+                        view.format = "avro".into();
+                        view.schema_id = Some(id);
+                        view.value = serde_json::json!({
+                            "_decodeError": err,
+                            "raw": view.raw_preview,
+                        });
+                        return view;
+                    }
+                }
+            }
+        }
+        decode_owned_message(topic, partition, offset, timestamp_ms, key, payload, headers)
+    }
+    pub async fn list_subjects(&self) -> Result<Vec<String>, String> {
+        let reg = self
+            .registry
+            .as_ref()
+            .ok_or("Schema Registry is not configured")?;
+        reg.list_subjects().await
+    }
+    pub async fn get_latest_schema(&self, subject: &str) -> Result<SchemaSubjectInfo, String> {
+        let reg = self
+            .registry
+            .as_ref()
+            .ok_or("Schema Registry is not configured")?;
+        reg.get_latest_schema(subject).await
+    }
+}

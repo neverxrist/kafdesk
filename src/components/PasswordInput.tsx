@@ -17,11 +17,19 @@ export default function PasswordInput({
 
   return (
     <div className="password-input">
+      {/*
+        Always type=text: WKWebView + custom fonts break type=password bullets (tofu).
+        Masking via -webkit-text-security on .is-masked instead.
+      */}
       <input
-        type={visible ? 'text' : 'password'}
+        type="text"
+        className={visible ? undefined : 'is-masked'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         autoComplete={autoComplete}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
       />
       <button
         type="button"
@@ -29,18 +37,10 @@ export default function PasswordInput({
         onClick={() => setVisible((v) => !v)}
         aria-label={visible ? hideLabel : showLabel}
         title={visible ? hideLabel : showLabel}
+        aria-pressed={visible}
       >
         {visible ? (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A10.4 10.4 0 0112 5c5 0 9.3 3.1 11 7.5a11.7 11.7 0 01-4.2 5.1M6.1 6.1A11.7 11.7 0 001 12.5C2.7 16.9 7 20 12 20c1.5 0 2.9-.3 4.2-.8"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        ) : (
+          /* open eye — password visible */
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
               d="M1 12.5C2.7 8.1 7 5 12 5s9.3 3.1 11 7.5c-1.7 4.4-6 7.5-11 7.5S2.7 16.9 1 12.5z"
@@ -49,6 +49,23 @@ export default function PasswordInput({
               strokeLinejoin="round"
             />
             <circle cx="12" cy="12.5" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ) : (
+          /* closed eye — password hidden */
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M3 12.5c1.8 2.8 5 4.5 9 4.5s7.2-1.7 9-4.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M8.5 14.2L7 16.5M12 14.8v2.7M15.5 14.2L17 16.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
           </svg>
         )}
       </button>

@@ -2,7 +2,7 @@ import type {
   ConsumerGroupInfo,
   GroupOffsetEntry,
   LagSummaryResult,
-} from '../../../electron/types'
+} from '../../types/kafdesk'
 import type { useLocale } from '../../hooks/useLocale'
 
 type Tr = ReturnType<typeof useLocale>['tr']

@@ -1,44 +1,31 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import electron from 'vite-plugin-electron/simple'
+
+// Tauri spike: plain Vite for the webview. Electron plugin removed on this branch.
+const host = process.env.TAURI_DEV_HOST
 
 export default defineConfig({
-  plugins: [
-    react(),
-    electron({
-      main: {
-        entry: 'electron/main.ts',
-        vite: {
-          build: {
-            rollupOptions: {
-              external: [
-                'kafkajs',
-                'kafkajs-snappy',
-                'snappyjs',
-                '@kafkajs/confluent-schema-registry',
-                'avsc',
-              ],
-            },
-          },
-        },
-      },
-      preload: {
-        input: 'electron/preload.ts',
-        vite: {
-          build: {
-            rollupOptions: {
-              output: {
-                format: 'cjs',
-                entryFileNames: 'preload.cjs',
-                inlineDynamicImports: true,
-              },
-            },
-          },
-        },
-      },
-    }),
-  ],
+  plugins: [react()],
+  clearScreen: false,
   server: {
     port: 5173,
+    strictPort: true,
+    host: host || false,
+    hmr: host
+      ? {
+          protocol: 'ws',
+          host,
+          port: 1421,
+        }
+      : undefined,
+    watch: {
+      ignored: ['**/src-tauri/**'],
+    },
+  },
+  envPrefix: ['VITE_', 'TAURI_'],
+  build: {
+    target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+    minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
+    sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
 })

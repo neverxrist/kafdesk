@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import type { ConsumeStartFrom, KafkaMessageView } from '../../electron/types'
+import type { ConsumeStartFrom, KafkaMessageView } from '../types/kafdesk'
 import {
   defaultConsumeFilterState,
   partitionsForFilter,

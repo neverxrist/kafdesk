@@ -1,0 +1,64 @@
+/** Shared desktop IPC surface (Tauri bridge). */
+import type {
+  AuthLoginRequest,
+  AuthProviderInfo,
+  AuthSessionPublic,
+  ClusterConfig,
+  ConnectResult,
+  ConsumeRequest,
+  ConsumerGroupInfo,
+  GroupOffsetEntry,
+  KafkaMessageView,
+  LagSummaryResult,
+  PingResult,
+  ProduceBatchRequest,
+  ProduceBatchResult,
+  ProduceRequest,
+  ProduceResult,
+  SchemaRegistryStatus,
+  SchemaSubjectInfo,
+  SetGroupOffsetsRequest,
+  StoredCredentialsInfo,
+  TailRequest,
+  TopicInfo,
+  UpdateSettings,
+  UpdateStatus,
+} from '../types/kafdesk'
+
+export type KafDeskApi = {
+  connect: (config: ClusterConfig) => Promise<ConnectResult>
+  disconnect: () => Promise<{ ok: boolean }>
+  status: () => Promise<{ connected: boolean; schemaRegistry: SchemaRegistryStatus }>
+  ping: () => Promise<PingResult>
+  probe: (config: ClusterConfig) => Promise<PingResult>
+  listTopics: () => Promise<TopicInfo[]>
+  getTopicOffsets: (topic: string) => Promise<TopicInfo>
+  consume: (request: ConsumeRequest) => Promise<KafkaMessageView[]>
+  produce: (request: ProduceRequest) => Promise<ProduceResult>
+  produceBatch: (request: ProduceBatchRequest) => Promise<ProduceBatchResult>
+  pickPemFile: () => Promise<string | null>
+  pickAvscFile: () => Promise<{ path: string; text: string } | null>
+  listSubjects: () => Promise<string[]>
+  getLatestSchema: (subject: string) => Promise<SchemaSubjectInfo>
+  listConsumerGroups: () => Promise<ConsumerGroupInfo[]>
+  getGroupOffsets: (groupId: string, topic?: string) => Promise<GroupOffsetEntry[]>
+  getLagSummary: (topic?: string) => Promise<LagSummaryResult>
+  setGroupOffsets: (request: SetGroupOffsetsRequest) => Promise<{ ok: boolean }>
+  resetGroupOffsets: (groupId: string, topic: string, earliest: boolean) => Promise<{ ok: boolean }>
+  tailStart: (request: TailRequest) => Promise<{ ok: boolean }>
+  tailStop: () => Promise<{ ok: boolean }>
+  onTailMessage: (cb: (msg: KafkaMessageView) => void) => () => void
+  onTailError: (cb: (message: string) => void) => () => void
+  listAuthProviders: () => Promise<AuthProviderInfo[]>
+  authSession: () => Promise<AuthSessionPublic>
+  authLogin: (request: AuthLoginRequest) => Promise<AuthSessionPublic>
+  authLogout: () => Promise<{ ok: boolean }>
+  storedCredentials: () => Promise<StoredCredentialsInfo>
+  forgetCredentials: () => Promise<{ ok: boolean }>
+  checkForUpdates: () => Promise<UpdateStatus>
+  updateStatus: () => Promise<UpdateStatus>
+  updateSettings: () => Promise<UpdateSettings>
+  setAutoUpdate: (enabled: boolean) => Promise<UpdateSettings>
+  getVersion: () => Promise<string>
+  onUpdateStatus: (cb: (s: UpdateStatus) => void) => () => void
+}

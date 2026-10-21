@@ -1,4 +1,4 @@
-import type { KafkaMessageView } from '../../electron/types'
+import type { KafkaMessageView } from '../types/kafdesk'
 
 export function messageBodyText(m: KafkaMessageView): string {
   if (typeof m.value === 'string') return m.value

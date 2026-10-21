@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { KafkaMessageView, TopicInfo } from '../../../electron/types'
+import type { KafkaMessageView, TopicInfo } from '../../types/kafdesk'
 import MessageCard from '../MessageCard'
 import type { useLocale } from '../../hooks/useLocale'
 import {

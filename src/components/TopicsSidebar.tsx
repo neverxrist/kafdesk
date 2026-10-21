@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { TopicInfo } from '../../electron/types'
+import type { TopicInfo } from '../types/kafdesk'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
 import {

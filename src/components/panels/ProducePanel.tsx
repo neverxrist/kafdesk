@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SchemaSubjectInfo, TopicInfo } from '../../../electron/types'
+import type { SchemaSubjectInfo, TopicInfo } from '../../types/kafdesk'
 import type { useLocale } from '../../hooks/useLocale'
 import type { ProduceTemplate } from '../../lib/produceTemplates'
 import { sortSubjectsForTopic } from '../../lib/messageText'

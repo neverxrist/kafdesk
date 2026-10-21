@@ -8,14 +8,34 @@ on:
 permissions:
   contents: write
 
-# Builds:
-#   macOS  → arm64 (Apple Silicon) + x64 (Intel)  → dmg + zip + latest-mac.yml
-#   Windows → x64                                  → exe + latest.yml
-#   Linux  → x64                                   → AppImage + deb + latest-linux.yml
+# Tauri 2 + rdkafka (cmake). Builds macOS (arm64 + x64), Windows, Linux.
 
 jobs:
-  build-mac:
-    runs-on: macos-14
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+            rust_target: aarch64-apple-darwin
+            artifact_name: mac-arm64
+            bundles: dmg,app
+          # Native Intel runner — avoids cross-compiling vendored librdkafka/cmake
+          - platform: macos-13
+            rust_target: x86_64-apple-darwin
+            artifact_name: mac-x64
+            bundles: dmg,app
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x64
+            bundles: deb,appimage
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            artifact_name: windows-x64
+            bundles: nsis,msi
+
+    runs-on: ${{ matrix.platform }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,111 +44,137 @@ jobs:
           node-version: 22
           cache: npm
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ${{ matrix.rust_target }}
+
+      - name: Install cmake (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential curl wget file \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libssl-dev
+
+      - name: Install cmake (Windows)
+        if: runner.os == 'Windows'
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.31.x'
+
       - run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Vite build
-        run: npx vite build
-
-      - name: Electron builder (mac arm64 + x64)
-        # --publish never: upload is done by softprops below (tag would otherwise
-        # trigger electron-builder GitHub publish and fail / confuse signing)
-        run: npx electron-builder --mac --arm64 --x64 --publish never
+      - name: Tauri build
+        shell: bash
+        run: |
+          node scripts/with-cmake.mjs tauri build \
+            --target "${{ matrix.rust_target }}" \
+            --bundles "${{ matrix.bundles }}"
         env:
-          # Unsigned until CSC_* / Apple secrets are configured in repo settings.
-          # Do NOT set CSC_LINK to empty — builder treats it as a cert path ("not a file").
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CI: true
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-out
+          BUNDLE="src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          # Native-target builds may land under target/release/bundle
+          if [ ! -d "$BUNDLE" ]; then
+            BUNDLE="src-tauri/target/release/bundle"
+          fi
+          echo "Looking in $BUNDLE"
+          find "$BUNDLE" -type f \( \
+            -name '*.dmg' -o -name '*.app' -o \
+            -name '*.deb' -o -name '*.AppImage' -o \
+            -name '*.msi' -o -name '*.exe' -o -name '*.nsis.zip' \
+          \) -print || true
+
+          cp -f "$BUNDLE"/dmg/*.dmg release-out/ 2>/dev/null || true
+          cp -f "$BUNDLE"/deb/*.deb release-out/ 2>/dev/null || true
+          cp -f "$BUNDLE"/appimage/*.AppImage release-out/ 2>/dev/null || true
+          cp -f "$BUNDLE"/msi/*.msi release-out/ 2>/dev/null || true
+          cp -f "$BUNDLE"/nsis/*.exe release-out/ 2>/dev/null || true
+
+          # Zip .app for GitHub Releases (DMG is primary for Mac)
+          APP_DIR=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' -type d 2>/dev/null | head -1 || true)
+          if [ -n "${APP_DIR:-}" ] && [ -d "$APP_DIR" ]; then
+            if command -v ditto >/dev/null 2>&1; then
+              ditto -c -k --sequesterRsrc --keepParent \
+                "$APP_DIR" \
+                "release-out/KafDesk-${{ matrix.artifact_name }}.app.zip"
+            else
+              (cd "$(dirname "$APP_DIR")" && zip -r \
+                "$GITHUB_WORKSPACE/release-out/KafDesk-${{ matrix.artifact_name }}.app.zip" \
+                "$(basename "$APP_DIR")")
+            fi
+          fi
+
+          # Rename for clarity when multiple Mac targets collide on filename
+          for f in release-out/*; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            case "$base" in
+              KafDesk-*) ;;
+              *)
+                ext="${base##*.}"
+                name="${base%.*}"
+                mv "$f" "release-out/${name}-${{ matrix.artifact_name }}.${ext}" 2>/dev/null || true
+                ;;
+            esac
+          done
+
+          ls -la release-out
+          test -n "$(ls -A release-out 2>/dev/null)" || { echo "No artifacts collected"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mac-release
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.blockmap
-            release/latest-mac.yml
-          if-no-files-found: error
-
-  build-win:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Vite build
-        run: npx vite build
-
-      - name: Electron builder (win x64)
-        run: npx electron-builder --win --x64 --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: win-release
-          path: |
-            release/*.exe
-            release/*.blockmap
-            release/latest.yml
-          if-no-files-found: error
-
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Vite build
-        run: npx vite build
-
-      - name: Electron builder (linux x64 AppImage + deb)
-        run: npx electron-builder --linux --x64 --publish never
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-release
-          path: |
-            release/*.AppImage
-            release/*.deb
-            release/*.blockmap
-            release/latest-linux.yml
+          name: ${{ matrix.artifact_name }}
+          path: release-out/*
           if-no-files-found: error
 
   publish:
-    needs: [build-mac, build-win, build-linux]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
 
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-files
+          find artifacts -type f -exec cp -f {} release-files/ \;
+          ls -la release-files
+
+      - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
-          draft: false
+          files: release-files/*
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          body: |
+            ## KafDesk ${{ github.ref_name }}
+
+            Tauri 2 desktop client (Electron removed).
+
+            ### Downloads
+            - **macOS Apple Silicon** — `*-mac-arm64.dmg`
+            - **macOS Intel** — `*-mac-x64.dmg`
+            - **Windows** — `*-windows-x64.exe` / `.msi`
+            - **Linux** — `*-linux-x64.AppImage` / `.deb`
+
+            Unsigned builds: on macOS you may need right-click → Open the first time.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

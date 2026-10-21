@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../../electron/types'
+import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../types/kafdesk'
 import MessageCard from '../MessageCard'
 import MessageDiffPanel from '../MessageDiffPanel'
 import type { useLocale } from '../../hooks/useLocale'

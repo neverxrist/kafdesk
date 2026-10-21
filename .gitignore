@@ -1,7 +1,13 @@
 node_modules
 dist
-dist-electron
 release
+.tmp-screencap/
+# Portable cmake for rdkafka-sys (no Homebrew required)
+src-tauri/.tools/
+# Accidental mobile icon packs from `tauri icon` (desktop-only)
+src-tauri/icons/android/
+src-tauri/icons/ios/
+src-tauri/icons/mipmap-*/
 # Local-only Kafka/SR test stack (not part of the app)
 share/
 build/icon.iconset
@@ -13,8 +19,7 @@ build/icon.iconset
 !.env.example
 *.local
 
-# AI / agent tooling (local only — not part of the product)
-.cursor/
+# Local AI tooling (AGENTS.md is tracked — map for agents/humans)
 .claude/
 .codex/
 .continue/
@@ -22,10 +27,11 @@ build/icon.iconset
 .aider*
 .gemini/
 .github/copilot-instructions.md
-AGENTS.md
 CLAUDE.md
 GEMINI.md
 .cursorrules
 .cursorignore
-**/.cursor/
-**/AGENTS.md
+# Keep committed Cursor rules for agents; ignore other local cursor junk if any
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
