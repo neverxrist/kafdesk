@@ -13,5 +13,19 @@ build/icon.iconset
 !.env.example
 *.local
 
-# Cursor local agent config
+# AI / agent tooling (local only — not part of the product)
 .cursor/
+.claude/
+.codex/
+.continue/
+.windsurf/
+.aider*
+.gemini/
+.github/copilot-instructions.md
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursorrules
+.cursorignore
+**/.cursor/
+**/AGENTS.md

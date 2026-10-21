@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { authService } from './auth/authService'
+import { wrapIpcHandler } from './infrastructure/ipc/wrapHandler'
 import { kafkaService } from './services/kafkaService'
 import { isRunningUnderRosetta } from './services/macDmgUpdater'
 import {
@@ -181,39 +182,46 @@ function createWindow() {
 }
 
 function registerIpc() {
-  ipcMain.handle('kafka:connect', async (_e, config: ClusterConfig) =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handle = (channel: string, fn: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => Promise<any>) => {
+    ipcMain.handle(channel, wrapIpcHandler(fn))
+  }
+
+  handle('kafka:connect', async (_e: Electron.IpcMainInvokeEvent, config: ClusterConfig) =>
     kafkaService.connect(config),
   )
 
-  ipcMain.handle('kafka:disconnect', async () => {
+  handle('kafka:disconnect', async () => {
     await kafkaService.disconnect()
     return { ok: true }
   })
 
-  ipcMain.handle('kafka:status', async () => ({
+  handle('kafka:status', async () => ({
     connected: kafkaService.isConnected(),
     schemaRegistry: kafkaService.getSchemaRegistryStatus(),
   }))
 
-  ipcMain.handle('kafka:ping', async () => kafkaService.ping())
+  handle('kafka:ping', async () => kafkaService.ping())
 
-  ipcMain.handle('kafka:probe', async (_e, config: ClusterConfig) => kafkaService.probe(config))
+  handle('kafka:probe', async (_e: Electron.IpcMainInvokeEvent, config: ClusterConfig) =>
+    kafkaService.probe(config),
+  )
 
-  ipcMain.handle('kafka:listTopics', async () => kafkaService.listTopics())
+  handle('kafka:listTopics', async () => kafkaService.listTopics())
 
-  ipcMain.handle('kafka:getTopicOffsets', async (_e, topic: string) =>
+  handle('kafka:getTopicOffsets', async (_e: Electron.IpcMainInvokeEvent, topic: string) =>
     kafkaService.getTopicOffsets(topic),
   )
 
-  ipcMain.handle('kafka:consume', async (_e, request: ConsumeRequest) =>
+  handle('kafka:consume', async (_e: Electron.IpcMainInvokeEvent, request: ConsumeRequest) =>
     kafkaService.consume(request),
   )
 
-  ipcMain.handle('kafka:produce', async (_e, request: ProduceRequest) =>
+  handle('kafka:produce', async (_e: Electron.IpcMainInvokeEvent, request: ProduceRequest) =>
     kafkaService.produce(request),
   )
 
-  ipcMain.handle('kafka:produceBatch', async (_e, request: ProduceBatchRequest) =>
+  handle('kafka:produceBatch', async (_e: Electron.IpcMainInvokeEvent, request: ProduceBatchRequest) =>
     kafkaService.produceBatch(request),
   )
 
@@ -247,36 +255,46 @@ function registerIpc() {
     return { path: filePath, text }
   })
 
-  ipcMain.handle('kafka:listSubjects', async () => kafkaService.listSubjects())
+  handle('kafka:listSubjects', async () => kafkaService.listSubjects())
 
-  ipcMain.handle('kafka:getLatestSchema', async (_e, subject: string) =>
+  handle('kafka:getLatestSchema', async (_e: Electron.IpcMainInvokeEvent, subject: string) =>
     kafkaService.getLatestSchema(subject),
   )
 
-  ipcMain.handle('kafka:listConsumerGroups', async () => kafkaService.listConsumerGroups())
+  handle('kafka:listConsumerGroups', async () => kafkaService.listConsumerGroups())
 
-  ipcMain.handle('kafka:getGroupOffsets', async (_e, groupId: string, topic?: string) =>
-    kafkaService.getGroupOffsets(groupId, topic),
+  handle(
+    'kafka:getGroupOffsets',
+    async (_e: Electron.IpcMainInvokeEvent, groupId: string, topic?: string) =>
+      kafkaService.getGroupOffsets(groupId, topic),
   )
 
-  ipcMain.handle('kafka:getLagSummary', async (_e, topic?: string) =>
+  handle('kafka:getLagSummary', async (_e: Electron.IpcMainInvokeEvent, topic?: string) =>
     kafkaService.getLagSummary(topic),
   )
 
-  ipcMain.handle('kafka:setGroupOffsets', async (_e, request: SetGroupOffsetsRequest) => {
-    await kafkaService.setGroupOffsets(request)
-    return { ok: true }
-  })
+  handle(
+    'kafka:setGroupOffsets',
+    async (_e: Electron.IpcMainInvokeEvent, request: SetGroupOffsetsRequest) => {
+      await kafkaService.setGroupOffsets(request)
+      return { ok: true }
+    },
+  )
 
-  ipcMain.handle(
+  handle(
     'kafka:resetGroupOffsets',
-    async (_e, groupId: string, topic: string, earliest: boolean) => {
+    async (
+      _e: Electron.IpcMainInvokeEvent,
+      groupId: string,
+      topic: string,
+      earliest: boolean,
+    ) => {
       await kafkaService.resetGroupOffsets(groupId, topic, earliest)
       return { ok: true }
     },
   )
 
-  ipcMain.handle('kafka:tailStart', async (e, request: TailRequest) => {
+  handle('kafka:tailStart', async (e: Electron.IpcMainInvokeEvent, request: TailRequest) => {
     await kafkaService.startTail(
       request,
       (msg) => {
@@ -289,7 +307,7 @@ function registerIpc() {
     return { ok: true }
   })
 
-  ipcMain.handle('kafka:tailStop', async () => {
+  handle('kafka:tailStop', async () => {
     await kafkaService.stopTail()
     return { ok: true }
   })
