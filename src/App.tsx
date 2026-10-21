@@ -83,51 +83,16 @@ export default function App() {
           busy={a.busy}
           onConnect={a.connect}
           onReconnect={a.reconnect}
+          tab={a.tab}
+          selectedTopic={a.selectedTopic}
+          onTabChange={(next) => {
+            a.setTab(next)
+            if (next === 'groups' && a.connected) {
+              if (a.groups.length === 0) void a.loadGroups()
+              else void a.loadLagSummary()
+            }
+          }}
         />
-
-        <div className="tabs">
-          <button
-            className={`tab ${a.tab === 'consume' ? 'active' : ''}`}
-            onClick={() => a.setTab('consume')}
-          >
-            {tr('consume')}
-          </button>
-          <button
-            className={`tab ${a.tab === 'produce' ? 'active' : ''}`}
-            onClick={() => a.setTab('produce')}
-          >
-            {tr('produce')}
-          </button>
-          <button
-            className={`tab ${a.tab === 'tail' ? 'active' : ''}`}
-            onClick={() => a.setTab('tail')}
-          >
-            {tr('tail')}
-          </button>
-          <button
-            className={`tab ${a.tab === 'groups' ? 'active' : ''}`}
-            onClick={() => {
-              a.setTab('groups')
-              if (a.connected) {
-                if (a.groups.length === 0) void a.loadGroups()
-                else void a.loadLagSummary()
-              }
-            }}
-          >
-            {tr('groups')}
-          </button>
-          <button
-            className={`tab ${a.tab === 'logs' ? 'active' : ''}`}
-            onClick={() => a.setTab('logs')}
-          >
-            {tr('logs')}
-          </button>
-          {a.selectedTopic && a.tab !== 'logs' && a.tab !== 'settings' && (
-            <span className="tab-topic">
-              {tr('topic')}: <strong>{a.selectedTopic}</strong>
-            </span>
-          )}
-        </div>
 
         {a.tab === 'consume' && (
           <ConsumeToolbar
@@ -214,7 +179,8 @@ export default function App() {
                 tr={tr}
                 topicDetails={a.topicDetails}
                 topicGroupLags={a.topicGroupLags}
-                messages={a.messages}
+                messages={a.filteredMessages}
+                windowMessageCount={a.windowMessageCount}
                 selectedTopic={a.selectedTopic}
                 busy={a.loadingMessages}
                 startFrom={a.startFrom}

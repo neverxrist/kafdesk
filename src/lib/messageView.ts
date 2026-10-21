@@ -1,7 +1,28 @@
 export const MESSAGE_VIEW_KEY = 'kafdesk.messageView'
 export const GROUP_BY_PARTITIONS_KEY = 'kafdesk.groupByPartitions'
+export const BATCH_TIME_SORT_KEY = 'kafdesk.batchTimeSort'
 
 export type MessageViewMode = 'full' | 'compact'
+/** Client-side order of the loaded window (not a broker seek). */
+export type BatchTimeSort = 'newest' | 'oldest'
+
+export function loadBatchTimeSort(): BatchTimeSort | null {
+  try {
+    const v = localStorage.getItem(BATCH_TIME_SORT_KEY)
+    if (v === 'newest' || v === 'oldest') return v
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+export function persistBatchTimeSort(sort: BatchTimeSort): void {
+  try {
+    localStorage.setItem(BATCH_TIME_SORT_KEY, sort)
+  } catch {
+    /* ignore */
+  }
+}
 
 export function loadMessageViewMode(): MessageViewMode {
   try {

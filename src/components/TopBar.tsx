@@ -23,6 +23,8 @@ function SidebarPanelIcon() {
   )
 }
 
+export type AppTab = 'consume' | 'produce' | 'groups' | 'tail' | 'logs' | 'settings'
+
 export default function TopBar({
   tr,
   theme,
@@ -41,6 +43,9 @@ export default function TopBar({
   busy,
   onConnect,
   onReconnect,
+  tab,
+  onTabChange,
+  selectedTopic,
 }: {
   tr: Tr
   theme: Theme
@@ -59,6 +64,9 @@ export default function TopBar({
   busy?: boolean
   onConnect: () => void
   onReconnect: () => void
+  tab: AppTab
+  onTabChange: (tab: AppTab) => void
+  selectedTopic: string | null
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -102,12 +110,19 @@ export default function TopBar({
         >
           <span className={`dot ${connected ? 'on' : ''}`} />
           <div className="topbar-conn-text">
-            <strong>{config.name}</strong>
-            <small>
-              {connected
-                ? `${tr('online')} · ${srStatus === 'ok' ? tr('srOk') : srStatus === 'fail' ? tr('srFail') : tr('srNone')}`
-                : tr('offline')}
-              {authSession.loggedIn ? ` · SSO ${authSession.username || 'ok'}` : ''}
+            <strong title={config.name}>{config.name}</strong>
+            <small
+              title={[
+                connected
+                  ? `${tr('online')} · ${srStatus === 'ok' ? tr('srOk') : srStatus === 'fail' ? tr('srFail') : tr('srNone')}`
+                  : tr('offline'),
+                authSession.loggedIn ? `SSO ${authSession.username || 'ok'}` : null,
+                config.brokers[0] || null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            >
+              {connected ? tr('online') : tr('offline')}
               {config.brokers[0] ? ` · ${config.brokers[0]}` : ''}
             </small>
           </div>
@@ -174,6 +189,32 @@ export default function TopBar({
           <ReconnectIcon />
         </button>
       </div>
+
+      <nav className="topbar-tabs" aria-label="Main">
+        {(
+          [
+            ['consume', tr('consume')],
+            ['produce', tr('produce')],
+            ['tail', tr('tail')],
+            ['groups', tr('groups')],
+            ['logs', tr('logs')],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`topbar-tab${tab === id ? ' active' : ''}`}
+            onClick={() => onTabChange(id)}
+          >
+            {label}
+          </button>
+        ))}
+        {selectedTopic && tab !== 'logs' && tab !== 'settings' && (
+          <span className="topbar-tab-topic" title={selectedTopic}>
+            {selectedTopic}
+          </span>
+        )}
+      </nav>
 
       <div className="topbar-controls">
         <button

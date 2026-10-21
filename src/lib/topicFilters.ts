@@ -1,5 +1,25 @@
 export const TOPIC_FILTERS_KEY = 'kafdesk.topicFilters.v1'
 export const ONLY_PINNED_TOPICS_KEY = 'kafdesk.onlyPinnedTopics'
+export const TOPICS_OPEN_KEY = 'kafdesk.topicsOpen'
+
+export function loadTopicsOpen(): boolean {
+  try {
+    const v = localStorage.getItem(TOPICS_OPEN_KEY)
+    if (v === '0') return false
+    if (v === '1') return true
+  } catch {
+    /* ignore */
+  }
+  return true
+}
+
+export function persistTopicsOpen(open: boolean): void {
+  try {
+    localStorage.setItem(TOPICS_OPEN_KEY, open ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+}
 
 export interface SavedTopicFilter {
   id: string

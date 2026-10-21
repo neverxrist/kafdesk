@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../../electron/types'
 import MessageCard from '../MessageCard'
 import MessageDiffPanel from '../MessageDiffPanel'
@@ -7,10 +7,13 @@ import type { SavedConsumeQuery } from '../../lib/savedQueries'
 import { RefreshIcon } from '../ConnActionIcons'
 import { messageId } from '../../lib/messageText'
 import {
+  loadBatchTimeSort,
   loadGroupByPartitions,
   loadMessageViewMode,
+  persistBatchTimeSort,
   persistGroupByPartitions,
   persistMessageViewMode,
+  type BatchTimeSort,
   type MessageViewMode,
 } from '../../lib/messageView'
 
@@ -106,167 +109,217 @@ export function ConsumeToolbar({
 
   return (
     <div className="toolbar toolbar-consume">
-      <div className="toolbar-row">
-        <div className="field">
-          <label>{tr('searchValue')}</label>
-          <input
-            value={search}
-            maxLength={FILTER_MAX}
-            onChange={(e) => setSearch(e.target.value.slice(0, FILTER_MAX))}
-            placeholder={tr('substring')}
-            disabled={!selectedTopic}
-          />
-        </div>
-        <div className="field">
-          <label>{tr('searchKey')}</label>
-          <input
-            value={searchKey}
-            maxLength={FILTER_MAX}
-            onChange={(e) => setSearchKey(e.target.value.slice(0, FILTER_MAX))}
-            placeholder={tr('keyContains')}
-            disabled={!selectedTopic}
-          />
-        </div>
-        <div className="field" style={{ maxWidth: 120 }}>
-          <label>{tr('partition')}</label>
-          <select
-            value={partitionFilter}
-            onChange={(e) => setPartitionFilter(e.target.value)}
-            disabled={!topicDetails}
-          >
-            <option value="all">{tr('all')}</option>
-            {topicDetails?.partitions.map((p) => (
-              <option key={p.partitionId} value={String(p.partitionId)}>
-                p{p.partitionId}
-                {p.approxMessages != null ? ` · ≈${p.approxMessages}` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field" style={{ maxWidth: 140 }}>
-          <label>{tr('startFrom')}</label>
-          <select value={startFrom} onChange={(e) => setStartFrom(e.target.value as ConsumeStartFrom)}>
-            <option value="beginning">{tr('beginning')}</option>
-            <option value="end">{tr('end')}</option>
-            <option value="offset">{tr('offset')}</option>
-          </select>
-        </div>
-        {startFrom === 'offset' && (
-          <div className="field" style={{ maxWidth: 120 }}>
-            <label>{tr('offset')}</label>
-            <input value={startOffset} onChange={(e) => setStartOffset(e.target.value)} placeholder="0" />
+      <div className="toolbar-row toolbar-consume-main">
+        <div className="toolbar-zone toolbar-zone-filter">
+          <span className="toolbar-zone-label">{tr('filterTag')}</span>
+          <div className="toolbar-zone-fields">
+            <div className="field toolbar-filter-field">
+              <label htmlFor="consume-search-value">{tr('searchValue')}</label>
+              <input
+                id="consume-search-value"
+                value={search}
+                maxLength={FILTER_MAX}
+                onChange={(e) => setSearch(e.target.value.slice(0, FILTER_MAX))}
+                placeholder={tr('substring')}
+                disabled={!selectedTopic}
+              />
+            </div>
+            <div className="field toolbar-filter-field">
+              <label htmlFor="consume-search-key">{tr('searchKey')}</label>
+              <input
+                id="consume-search-key"
+                value={searchKey}
+                maxLength={FILTER_MAX}
+                onChange={(e) => setSearchKey(e.target.value.slice(0, FILTER_MAX))}
+                placeholder={tr('keyContains')}
+                disabled={!selectedTopic}
+              />
+            </div>
           </div>
-        )}
-        <div className="field" style={{ maxWidth: 90 }}>
-          <label>{tr('limit')}</label>
-          <input
-            type="number"
-            min={1}
-            max={500}
-            value={limitText}
-            onChange={(e) => {
-              setLimitText(e.target.value)
-              const n = Number(e.target.value)
-              if (Number.isFinite(n) && e.target.value.trim() !== '') {
-                setLimit(Math.min(500, Math.max(1, Math.trunc(n))))
-              }
-            }}
-            onBlur={(e) => {
-              if (e.target.value.trim() === '') {
-                setLimitText(String(limit))
-              } else {
-                commitLimit(e.target.value)
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-            }}
-          />
         </div>
-        <button
-          type="button"
-          className={showAdvanced || advancedActive ? 'toolbar-more active' : 'toolbar-more'}
-          onClick={() => setShowAdvanced((v) => !v)}
-          aria-expanded={showAdvanced}
-        >
-          {advancedActive
-            ? tr('moreFiltersActive', { n: advancedActive })
-            : tr('moreFilters')}{' '}
-          {showAdvanced ? '▴' : '▾'}
-        </button>
-        <button
-          type="button"
-          className={`primary toolbar-refresh-btn${busy ? ' busy' : ''}`}
-          disabled={!selectedTopic || busy}
-          onClick={() => onLoadMessages()}
-          title={busy ? tr('loadingMessages') : tr('refresh')}
-          aria-label={busy ? tr('loadingMessages') : tr('refresh')}
-        >
-          <RefreshIcon />
-        </button>
+
+        <div className="toolbar-zone toolbar-zone-seek" title={tr('seekHint')}>
+          <span className="toolbar-zone-label">{tr('seekTag')}</span>
+          <div className="toolbar-zone-fields">
+            <div className="field toolbar-seek-field toolbar-seek-part">
+              <label htmlFor="consume-partition">{tr('partition')}</label>
+              <select
+                id="consume-partition"
+                value={partitionFilter}
+                onChange={(e) => setPartitionFilter(e.target.value)}
+                disabled={!topicDetails}
+              >
+                <option value="all">{tr('all')}</option>
+                {topicDetails?.partitions.map((p) => (
+                  <option key={p.partitionId} value={String(p.partitionId)}>
+                    {p.partitionId}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field toolbar-seek-field toolbar-seek-from">
+              <label htmlFor="consume-batch">{tr('startFrom')}</label>
+              <select
+                id="consume-batch"
+                value={startFrom}
+                onChange={(e) => setStartFrom(e.target.value as ConsumeStartFrom)}
+                disabled={!selectedTopic}
+              >
+                <option value="beginning">{tr('batchFromStart')}</option>
+                <option value="end">{tr('batchFromEnd')}</option>
+                <option value="offset">{tr('offset')}</option>
+              </select>
+            </div>
+            {startFrom === 'offset' && (
+              <div className="field toolbar-seek-field toolbar-seek-offset">
+                <label htmlFor="consume-offset">{tr('offset')}</label>
+                <input
+                  id="consume-offset"
+                  value={startOffset}
+                  onChange={(e) => setStartOffset(e.target.value)}
+                  placeholder="0"
+                  disabled={!selectedTopic}
+                />
+              </div>
+            )}
+            <div className="field toolbar-seek-field toolbar-seek-limit">
+              <label htmlFor="consume-limit">{tr('limit')}</label>
+              <input
+                id="consume-limit"
+                type="number"
+                min={1}
+                max={500}
+                value={limitText}
+                onChange={(e) => {
+                  setLimitText(e.target.value)
+                  const n = Number(e.target.value)
+                  if (Number.isFinite(n) && e.target.value.trim() !== '') {
+                    setLimit(Math.min(500, Math.max(1, Math.trunc(n))))
+                  }
+                }}
+                onBlur={(e) => {
+                  if (e.target.value.trim() === '') {
+                    setLimitText(String(limit))
+                  } else {
+                    commitLimit(e.target.value)
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+                disabled={!selectedTopic}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="toolbar-actions">
+          <button
+            type="button"
+            className={
+              showAdvanced || advancedActive ? 'toolbar-more active' : 'toolbar-more'
+            }
+            onClick={() => setShowAdvanced((v) => !v)}
+            aria-expanded={showAdvanced}
+            title={
+              advancedActive
+                ? tr('moreFiltersActive', { n: advancedActive })
+                : tr('moreFilters')
+            }
+          >
+            {advancedActive ? (
+              <span className="toolbar-more-count">{advancedActive}</span>
+            ) : null}
+            <MoreFiltersIcon />
+          </button>
+          <button
+            type="button"
+            className={`primary toolbar-refresh-btn${busy ? ' busy' : ''}`}
+            disabled={!selectedTopic || busy}
+            onClick={() => onLoadMessages()}
+            title={busy ? tr('loadingMessages') : tr('refresh')}
+            aria-label={busy ? tr('loadingMessages') : tr('refresh')}
+          >
+            <RefreshIcon />
+          </button>
+        </div>
       </div>
 
       {showAdvanced && (
         <div className="toolbar-advanced">
-          <div className="toolbar-row toolbar-row-filters">
-            <div className="field">
-              <label>{tr('headerKey')}</label>
-              <input
-                value={headerKey}
-                maxLength={FILTER_MAX}
-                onChange={(e) => setHeaderKey(e.target.value.slice(0, FILTER_MAX))}
-                placeholder={tr('headerKeyPh')}
-                disabled={!selectedTopic}
-              />
+          <div className="toolbar-adv-section">
+            <span className="toolbar-adv-caption">{tr('advHeadersTime')}</span>
+            <div className="toolbar-adv-grid">
+              <div className="field">
+                <label htmlFor="consume-header-key">{tr('headerKey')}</label>
+                <input
+                  id="consume-header-key"
+                  value={headerKey}
+                  maxLength={FILTER_MAX}
+                  onChange={(e) => setHeaderKey(e.target.value.slice(0, FILTER_MAX))}
+                  placeholder={tr('headerKeyPh')}
+                  disabled={!selectedTopic}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="consume-header-value">{tr('headerValue')}</label>
+                <input
+                  id="consume-header-value"
+                  value={headerValue}
+                  maxLength={FILTER_MAX}
+                  onChange={(e) => setHeaderValue(e.target.value.slice(0, FILTER_MAX))}
+                  placeholder={tr('headerValuePh')}
+                  disabled={!selectedTopic}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="consume-time-from">{tr('timeFrom')}</label>
+                <input
+                  id="consume-time-from"
+                  type="datetime-local"
+                  value={timeFrom}
+                  onChange={(e) => setTimeFrom(e.target.value)}
+                  disabled={!selectedTopic}
+                />
+              </div>
+              <div className="field toolbar-adv-time-to">
+                <label htmlFor="consume-time-to">{tr('timeTo')}</label>
+                <div className="toolbar-adv-time-wrap">
+                  <input
+                    id="consume-time-to"
+                    type="datetime-local"
+                    value={timeTo}
+                    onChange={(e) => setTimeTo(e.target.value)}
+                    disabled={!selectedTopic}
+                  />
+                  {(timeFrom || timeTo) && (
+                    <button
+                      type="button"
+                      className="toolbar-clear-time"
+                      onClick={() => {
+                        setTimeFrom('')
+                        setTimeTo('')
+                      }}
+                      title={tr('clear')}
+                      aria-label={tr('clear')}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-            <div className="field">
-              <label>{tr('headerValue')}</label>
-              <input
-                value={headerValue}
-                maxLength={FILTER_MAX}
-                onChange={(e) => setHeaderValue(e.target.value.slice(0, FILTER_MAX))}
-                placeholder={tr('headerValuePh')}
-                disabled={!selectedTopic}
-              />
-            </div>
-            <div className="field toolbar-time-field">
-              <label>{tr('timeFrom')}</label>
-              <input
-                type="datetime-local"
-                value={timeFrom}
-                onChange={(e) => setTimeFrom(e.target.value)}
-                disabled={!selectedTopic}
-              />
-            </div>
-            <div className="field toolbar-time-field">
-              <label>{tr('timeTo')}</label>
-              <input
-                type="datetime-local"
-                value={timeTo}
-                onChange={(e) => setTimeTo(e.target.value)}
-                disabled={!selectedTopic}
-              />
-            </div>
-            {(timeFrom || timeTo) && (
-              <button
-                type="button"
-                className="toolbar-clear-time"
-                onClick={() => {
-                  setTimeFrom('')
-                  setTimeTo('')
-                }}
-                title={tr('clear')}
-                aria-label={tr('clear')}
-              >
-                ×
-              </button>
-            )}
           </div>
-          <div className="saved-queries-block">
-            <div className="field saved-queries-field">
-              <label>{tr('savedQueries')}</label>
-              <div className="saved-queries-grid">
-                <select value={savedId} onChange={(e) => setSavedId(e.target.value)}>
+
+          <div className="toolbar-adv-section toolbar-adv-saved">
+            <span className="toolbar-adv-caption">{tr('savedQueries')}</span>
+            <div className="toolbar-adv-saved-rows">
+              <div className="toolbar-adv-saved-row">
+                <select
+                  value={savedId}
+                  onChange={(e) => setSavedId(e.target.value)}
+                  aria-label={tr('savedQueries')}
+                >
                   <option value="">
                     {savedQueries.length ? tr('selectQuery') : tr('noSavedQueries')}
                   </option>
@@ -279,6 +332,7 @@ export function ConsumeToolbar({
                 </select>
                 <button
                   type="button"
+                  className="toolbar-adv-btn"
                   disabled={!savedId || busy}
                   onClick={() => onApplyQuery(savedId)}
                 >
@@ -286,6 +340,7 @@ export function ConsumeToolbar({
                 </button>
                 <button
                   type="button"
+                  className="toolbar-adv-btn"
                   disabled={!savedId}
                   onClick={() => {
                     onDeleteQuery(savedId)
@@ -294,14 +349,18 @@ export function ConsumeToolbar({
                 >
                   {tr('deleteQuery')}
                 </button>
+              </div>
+              <div className="toolbar-adv-saved-row">
                 <input
                   value={queryName}
                   onChange={(e) => setQueryName(e.target.value)}
                   placeholder={tr('queryNamePh')}
                   disabled={!selectedTopic}
+                  aria-label={tr('queryNamePh')}
                 />
                 <button
                   type="button"
+                  className="primary toolbar-adv-btn toolbar-adv-save"
                   disabled={!queryName.trim() || !selectedTopic}
                   onClick={() => {
                     onSaveQuery(queryName)
@@ -317,6 +376,18 @@ export function ConsumeToolbar({
       )}
     </div>
   )
+}
+
+function compareByTime(a: KafkaMessageView, b: KafkaMessageView, newestFirst: boolean): number {
+  const ta = Number(a.timestamp)
+  const tb = Number(b.timestamp)
+  if (ta !== tb) return newestFirst ? tb - ta : ta - tb
+  if (a.partition !== b.partition) {
+    return newestFirst ? b.partition - a.partition : a.partition - b.partition
+  }
+  const oa = Number(a.offset)
+  const ob = Number(b.offset)
+  return newestFirst ? ob - oa : oa - ob
 }
 
 function groupByPartition(
@@ -336,11 +407,7 @@ function groupByPartition(
     .sort((a, b) => a[0] - b[0])
     .map(([partition, msgs]) => ({
       partition,
-      messages: [...msgs].sort((a, b) => {
-        const oa = Number(a.offset)
-        const ob = Number(b.offset)
-        return newestFirst ? ob - oa : oa - ob
-      }),
+      messages: [...msgs].sort((a, b) => compareByTime(a, b, newestFirst)),
     }))
 }
 
@@ -349,6 +416,7 @@ export default function ConsumePanel({
   topicDetails,
   topicGroupLags,
   messages,
+  windowMessageCount = 0,
   selectedTopic,
   busy,
   startFrom = 'end',
@@ -360,7 +428,10 @@ export default function ConsumePanel({
   tr: Tr
   topicDetails: TopicInfo | null
   topicGroupLags: Array<{ groupId: string; totalLag: number }> | null
+  /** Already client-filtered view of the loaded window */
   messages: KafkaMessageView[]
+  /** Raw broker window size (before search/key/headers/time) */
+  windowMessageCount?: number
   selectedTopic: string | null
   busy?: boolean
   startFrom?: ConsumeStartFrom
@@ -372,7 +443,10 @@ export default function ConsumePanel({
   const [hiddenPartitions, setHiddenPartitions] = useState<Set<number>>(() => new Set())
   const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
   const [groupByPartitions, setGroupByPartitions] = useState(() => loadGroupByPartitions())
-  const newestFirst = startFrom === 'end'
+  const [timeSort, setTimeSort] = useState<BatchTimeSort>(
+    () => loadBatchTimeSort() ?? (startFrom === 'end' ? 'newest' : 'oldest'),
+  )
+  const newestFirst = timeSort === 'newest'
 
   function setView(mode: MessageViewMode) {
     setViewMode(mode)
@@ -384,6 +458,15 @@ export default function ConsumePanel({
     persistGroupByPartitions(on)
   }
 
+  function setBatchSort(sort: BatchTimeSort) {
+    setTimeSort(sort)
+    persistBatchTimeSort(sort)
+  }
+
+  function toggleBatchSort() {
+    setBatchSort(newestFirst ? 'oldest' : 'newest')
+  }
+
   const byPartition = useMemo(
     () => groupByPartition(messages, newestFirst),
     [messages, newestFirst],
@@ -393,8 +476,11 @@ export default function ConsumePanel({
     [byPartition, hiddenPartitions],
   )
   const flatMessages = useMemo(
-    () => messages.filter((m) => !hiddenPartitions.has(m.partition)),
-    [messages, hiddenPartitions],
+    () =>
+      messages
+        .filter((m) => !hiddenPartitions.has(m.partition))
+        .sort((a, b) => compareByTime(a, b, newestFirst)),
+    [messages, hiddenPartitions, newestFirst],
   )
   const diffIds = useMemo(() => new Set(diffMessages.map(messageId)), [diffMessages])
   const diffFull = diffMessages.length >= 2
@@ -402,6 +488,14 @@ export default function ConsumePanel({
   useEffect(() => {
     setHiddenPartitions(new Set())
   }, [selectedTopic])
+
+  // When Seek/Batch direction changes, reset list order to match (flip still local).
+  const prevStartFrom = useRef(startFrom)
+  useEffect(() => {
+    if (prevStartFrom.current === startFrom) return
+    prevStartFrom.current = startFrom
+    setBatchSort(startFrom === 'end' ? 'newest' : 'oldest')
+  }, [startFrom])
 
   function togglePartition(id: number) {
     setHiddenPartitions((prev) => {
@@ -511,6 +605,15 @@ export default function ConsumePanel({
                 />
                 {tr('groupByPartitions')}
               </label>
+              <button
+                type="button"
+                className="batch-sort-btn"
+                onClick={toggleBatchSort}
+                title={newestFirst ? tr('batchSortNewest') : tr('batchSortOldest')}
+                aria-label={newestFirst ? tr('batchSortNewest') : tr('batchSortOldest')}
+              >
+                <BatchSortIcon newestFirst={newestFirst} />
+              </button>
               <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
                 <button
                   type="button"
@@ -555,7 +658,9 @@ export default function ConsumePanel({
             ? tr('selectTopic')
             : busy
               ? tr('loadingMessages')
-              : tr('noMessagesWindow')}
+              : windowMessageCount > 0
+                ? tr('noMessagesFilter')
+                : tr('noMessagesWindow')}
         </div>
       )}
 
@@ -570,5 +675,44 @@ export default function ConsumePanel({
           ))
         : flatMessages.map(renderCard)}
     </section>
+  )
+}
+
+function MoreFiltersIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M2.4 3.2h11.2l-3.9 4.7v3.4L6.3 13.2V7.9L2.4 3.2z"
+        opacity="0.9"
+      />
+    </svg>
+  )
+}
+
+/** Clock + direction — batch timestamp order (local, no seek). */
+function BatchSortIcon({ newestFirst }: { newestFirst: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="7" cy="8" r="5.25" fill="none" stroke="currentColor" strokeWidth="1.35" />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        d="M7 5.2v3.1l2.1 1.25"
+      />
+      {newestFirst ? (
+        <path
+          fill="currentColor"
+          d="M13.15 3.1v3.55h-.95V4.55l-1.35 1.35-.65-.65L12.5 3.1h.65z"
+        />
+      ) : (
+        <path
+          fill="currentColor"
+          d="M13.15 12.9V9.35h-.95v2.1l-1.35-1.35-.65.65 2.3 2.15h.65z"
+        />
+      )}
+    </svg>
   )
 }

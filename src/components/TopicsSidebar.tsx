@@ -5,8 +5,10 @@ import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
 import {
   loadOnlyPinnedTopics,
   loadTopicFilters,
+  loadTopicsOpen,
   persistOnlyPinnedTopics,
   persistTopicFilters,
+  persistTopicsOpen,
   type SavedTopicFilter,
 } from '../lib/topicFilters'
 
@@ -33,10 +35,16 @@ export default function TopicsSidebar({
   pinnedTopics: string[]
   onTogglePin: (name: string) => void
 }) {
+  const [topicsOpen, setTopicsOpen] = useState(() => loadTopicsOpen())
   const [dlqOpen, setDlqOpen] = useState(false)
   const [internalOpen, setInternalOpen] = useState(false)
   const [savedFilters, setSavedFilters] = useState<SavedTopicFilter[]>(() => loadTopicFilters())
   const [onlyPinned, setOnlyPinned] = useState(() => loadOnlyPinnedTopics())
+
+  function setTopicsPanelOpen(open: boolean) {
+    setTopicsOpen(open)
+    persistTopicsOpen(open)
+  }
 
   const pinnedSet = new Set(pinnedTopics)
   const pinned = filteredTopics.filter((t) => pinnedSet.has(t.name))
@@ -136,10 +144,38 @@ export default function TopicsSidebar({
 
   const canSaveFilter = Boolean(topicQuery.trim())
 
+  if (!topicsOpen) {
+    return (
+      <section className="topics topics-collapsed" aria-label={tr('topics', { n: visibleCount })}>
+        <button
+          type="button"
+          className="topics-expand-btn"
+          title={tr('expandTopics')}
+          aria-label={tr('expandTopics')}
+          onClick={() => setTopicsPanelOpen(true)}
+        >
+          <span className="topics-expand-chevron">⟩</span>
+          <span className="topics-expand-label">{tr('topicsShort')}</span>
+        </button>
+      </section>
+    )
+  }
+
   return (
     <section className="topics">
+      <div className="topics-head">
+        <label className="topics-head-label">{tr('topics', { n: visibleCount })}</label>
+        <button
+          type="button"
+          className="icon-btn topics-collapse-btn"
+          title={tr('collapseTopics')}
+          aria-label={tr('collapseTopics')}
+          onClick={() => setTopicsPanelOpen(false)}
+        >
+          ⟨
+        </button>
+      </div>
       <div className="field">
-        <label>{tr('topics', { n: visibleCount })}</label>
         <div className="topic-filter-row">
           <input
             value={topicQuery}

@@ -22,7 +22,6 @@ import {
 import {
   loadSavedQueries,
   persistSavedQueries,
-  timeInputToMs,
   type SavedConsumeQuery,
 } from '../lib/savedQueries'
 import {
@@ -37,6 +36,7 @@ import {
 import { mockFromAvroSchemaPretty } from '../lib/avroMock'
 import { expandProduceTemplate } from '../lib/produceVars'
 import { guessAvroSubject, messageBodyText, messageId } from '../lib/messageText'
+import { filterMessages } from '../lib/messageFilter'
 import type { AppLogEntry } from './useAppLogs'
 
 export type { SavedConsumeQuery }
@@ -100,6 +100,20 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [startOffset, setStartOffset] = useState('0')
   const [partitionFilter, setPartitionFilter] = useState<string>('all')
   const [savedQueries, setSavedQueries] = useState<SavedConsumeQuery[]>(() => loadSavedQueries())
+
+  /** Raw broker window → client filters (search/key/headers/time). */
+  const filteredMessages = useMemo(
+    () =>
+      filterMessages(messages, {
+        search,
+        searchKey,
+        headerKey,
+        headerValue,
+        timeFrom,
+        timeTo,
+      }),
+    [messages, search, searchKey, headerKey, headerValue, timeFrom, timeTo],
+  )
 
   const [tab, setTab] = useState<'consume' | 'produce' | 'groups' | 'tail' | 'logs' | 'settings'>(
     'consume',
@@ -913,31 +927,35 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     else filterReloadTimer.current = setTimeout(run, delayMs)
   }
 
-  /** UI setters: update state and re-fetch (selects immediately, text debounced). */
+  /**
+   * Client-side filters — narrow the already loaded window, no Kafka round-trip.
+   * Broker reload stays on startFrom / offset / limit / partition / Refresh.
+   */
   function setSearchFilter(v: string) {
     setSearch(v)
-    scheduleConsumeReload({ search: v }, 350)
+    filterStateRef.current = { ...filterStateRef.current, search: v }
   }
   function setSearchKeyFilter(v: string) {
     setSearchKey(v)
-    scheduleConsumeReload({ searchKey: v }, 350)
+    filterStateRef.current = { ...filterStateRef.current, searchKey: v }
   }
   function setHeaderKeyFilter(v: string) {
     setHeaderKey(v)
-    scheduleConsumeReload({ headerKey: v }, 350)
+    filterStateRef.current = { ...filterStateRef.current, headerKey: v }
   }
   function setHeaderValueFilter(v: string) {
     setHeaderValue(v)
-    scheduleConsumeReload({ headerValue: v }, 350)
+    filterStateRef.current = { ...filterStateRef.current, headerValue: v }
   }
   function setTimeFromFilter(v: string) {
     setTimeFrom(v)
-    scheduleConsumeReload({ timeFrom: v })
+    filterStateRef.current = { ...filterStateRef.current, timeFrom: v }
   }
   function setTimeToFilter(v: string) {
     setTimeTo(v)
-    scheduleConsumeReload({ timeTo: v })
+    filterStateRef.current = { ...filterStateRef.current, timeTo: v }
   }
+  /** Window controls — re-fetch from broker. */
   function setPartitionFilterUI(v: string) {
     setPartitionFilter(v)
     scheduleConsumeReload({ partitionFilter: v })
@@ -1019,17 +1037,12 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         await window.kafdesk.tailStop()
         setTailing(false)
       }
+      // Window only — search/key/headers/time filter client-side on `messages`.
       const rows = await window.kafdesk.consume({
         topic,
         startFrom: f.startFrom,
         startOffset: f.startFrom === 'offset' ? f.startOffset : undefined,
         limit: f.limit,
-        search: f.search || undefined,
-        searchKey: f.searchKey || undefined,
-        searchHeaderKey: f.headerKey || undefined,
-        searchHeaderValue: f.headerValue || undefined,
-        timeFrom: timeInputToMs(f.timeFrom),
-        timeTo: timeInputToMs(f.timeTo),
         partitions: partitionsFor(f.partitionFilter),
       })
       // Ignore stale responses if a newer filter/topic request already started
@@ -1362,6 +1375,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     pinnedTopics,
     togglePinTopic,
     messages,
+    filteredMessages,
+    windowMessageCount: messages.length,
     diffMessages,
     toggleDiffMessage,
     clearDiff,

@@ -1,11 +1,20 @@
-import { useMemo, useState, type MouseEvent } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import type { KafkaMessageView } from '../../electron/types'
 import { formatBadgeLabel, formatMessageDateTime } from '../lib/format'
 import { highlightMessageBody } from '../lib/jsonHighlight'
 import { messageId } from '../lib/messageText'
 import type { MessageViewMode } from '../lib/messageView'
 
-const COLLAPSE_CHARS = 280
+/** Collapsed preview ≈ 2 lines; shorter bodies stay fully open. */
+const PREVIEW_MAX_LINES = 2
+const PREVIEW_CHARS_PER_LINE = 96
+
+function bodyNeedsCollapse(body: string): boolean {
+  const lines = body.split('\n')
+  if (lines.length > PREVIEW_MAX_LINES) return true
+  const longest = lines.reduce((n, line) => Math.max(n, line.length), 0)
+  return longest > PREVIEW_CHARS_PER_LINE * PREVIEW_MAX_LINES
+}
 
 function CopyIcon() {
   return (
@@ -75,15 +84,25 @@ export default function MessageCard({
 }) {
   const headerEntries = Object.entries(m.headers || {})
   const when = formatMessageDateTime(m.timestamp)
+  const id = messageId(m)
+  const compact = viewMode === 'compact'
   const body = useMemo(
     () => (typeof m.value === 'string' ? m.value : JSON.stringify(m.value, null, 2)),
     [m.value],
   )
-  const long = body.length > COLLAPSE_CHARS
-  const [expanded, setExpanded] = useState(!long)
+  const needsCollapse = useMemo(() => bodyNeedsCollapse(body), [body])
+  /** Full: collapse only when taller than ~2 lines; Compact: hidden until open. */
+  const [expanded, setExpanded] = useState(() => !compact && !needsCollapse)
   const [copied, setCopied] = useState(false)
-  const shown = expanded || !long ? body : `${body.slice(0, COLLAPSE_CHARS)}…`
-  const highlighted = useMemo(() => highlightMessageBody(shown), [shown])
+  const highlighted = useMemo(() => highlightMessageBody(body), [body])
+  const toggleLabel = expanded
+    ? labels?.collapse ?? 'Collapse'
+    : labels?.expand ?? 'Expand'
+  const showFullBody = compact ? expanded : expanded || !needsCollapse
+
+  useEffect(() => {
+    setExpanded(!compact && !needsCollapse)
+  }, [id, compact, needsCollapse])
 
   function fallbackCopy(text: string): boolean {
     try {
@@ -116,63 +135,82 @@ export default function MessageCard({
     window.setTimeout(() => setCopied(false), 1200)
   }
 
-  if (viewMode === 'compact') {
+  function toggleExpanded() {
+    setExpanded((v) => !v)
+  }
+
+  const metaRight = (
+    <span className="msg-head-right">
+      <span className="msg-chip">p{m.partition}</span>
+      <span className="msg-chip msg-offset">
+        offset <strong>{m.offset}</strong>
+      </span>
+      <span className="msg-datetime">{when ?? ''}</span>
+      <span className={`badge ${m.format}`} title={`Detected type: ${m.format}`}>
+        {formatBadgeLabel(m.format, m.schemaId)}
+      </span>
+    </span>
+  )
+
+  const keyBlock =
+    m.key != null ? (
+      <span className="msg-key" title={String(m.key)}>
+        <em>{keyLabel}</em>
+        <strong>{m.key}</strong>
+      </span>
+    ) : (
+      <span className="msg-key muted">—</span>
+    )
+
+  if (compact) {
     return (
       <article
-        className={`msg msg-compact ${selectedForDiff ? 'msg-diff-selected' : ''}`}
-        data-msgid={messageId(m)}
+        className={`msg msg-compact${expanded ? ' is-open' : ''}${selectedForDiff ? ' msg-diff-selected' : ''}`}
+        data-msgid={id}
       >
-        <div className="msg-compact-row">
-          {m.key != null ? (
-            <span className="msg-key" title={String(m.key)}>
-              <em>{keyLabel}</em>
-              <strong>{m.key}</strong>
-            </span>
-          ) : (
-            <span className="msg-key muted">—</span>
-          )}
-          <span className="msg-head-right">
-            <span className="msg-chip">p{m.partition}</span>
-            <span className="msg-chip msg-offset">
-              offset <strong>{m.offset}</strong>
-            </span>
-            <span className="msg-datetime">{when ?? ''}</span>
-            <span className={`badge ${m.format}`} title={`Detected type: ${m.format}`}>
-              {formatBadgeLabel(m.format, m.schemaId)}
-            </span>
+        <button
+          type="button"
+          className="msg-compact-row"
+          aria-expanded={expanded}
+          title={toggleLabel}
+          onClick={toggleExpanded}
+        >
+          <span className="msg-compact-chevron" aria-hidden="true">
+            {expanded ? '▾' : '▸'}
           </span>
-        </div>
+          {keyBlock}
+          {metaRight}
+        </button>
+        {expanded && (
+          <div className="msg-body-wrap msg-compact-body">
+            {labels?.copyValue && (
+              <button
+                type="button"
+                className={`msg-copy${copied ? ' is-copied' : ''}`}
+                title={copied ? labels.copied : labels.copyValue}
+                aria-label={copied ? labels.copied : labels.copyValue}
+                onClick={(e) => void copyBody(e)}
+              >
+                {copied ? <CheckIcon /> : <CopyIcon />}
+              </button>
+            )}
+            <pre className="msg-body">{highlighted}</pre>
+          </div>
+        )}
       </article>
     )
   }
 
-  const showActions = Boolean(labels && (onRepublish || onToggleDiff || long))
-
   return (
-    <article className={`msg ${selectedForDiff ? 'msg-diff-selected' : ''}`} data-msgid={messageId(m)}>
+    <article
+      className={`msg${expanded ? ' is-open' : ''}${selectedForDiff ? ' msg-diff-selected' : ''}`}
+      data-msgid={id}
+    >
       <div className="msg-head">
-        <span className="msg-meta">
-          {m.key != null ? (
-            <span className="msg-key" title={String(m.key)}>
-              <em>{keyLabel}</em>
-              <strong>{m.key}</strong>
-            </span>
-          ) : (
-            <span className="msg-key muted">—</span>
-          )}
-        </span>
-        <span className="msg-head-right">
-          <span className="msg-chip">p{m.partition}</span>
-          <span className="msg-chip msg-offset">
-            offset <strong>{m.offset}</strong>
-          </span>
-          <span className="msg-datetime">{when ?? ''}</span>
-          <span className={`badge ${m.format}`} title={`Detected type: ${m.format}`}>
-            {formatBadgeLabel(m.format, m.schemaId)}
-          </span>
-        </span>
+        <span className="msg-meta">{keyBlock}</span>
+        {metaRight}
       </div>
-      {showActions && labels && (
+      {labels && (onRepublish || onToggleDiff || needsCollapse) && (
         <div className="msg-actions">
           {onRepublish && labels.republish && (
             <button type="button" className="msg-action" onClick={() => onRepublish(m)}>
@@ -189,12 +227,12 @@ export default function MessageCard({
               {selectedForDiff ? labels.diffSelected : labels.diffSelect}
             </button>
           )}
-          {long && (
+          {needsCollapse && (
             <button
               type="button"
               className="msg-action"
               aria-expanded={expanded}
-              onClick={() => setExpanded((v) => !v)}
+              onClick={toggleExpanded}
             >
               {expanded ? labels.collapse : labels.expand}
             </button>
@@ -210,7 +248,7 @@ export default function MessageCard({
           ))}
         </div>
       )}
-      <div className={`msg-body-wrap${expanded || !long ? '' : ' is-collapsed'}`}>
+      <div className={`msg-body-wrap${showFullBody ? '' : ' is-collapsed'}`}>
         {labels?.copyValue && (
           <button
             type="button"
@@ -222,10 +260,16 @@ export default function MessageCard({
             {copied ? <CheckIcon /> : <CopyIcon />}
           </button>
         )}
-        {expanded || !long ? (
+        {showFullBody ? (
           <pre className="msg-body">{highlighted}</pre>
         ) : (
-          <button type="button" className="msg-preview" onClick={() => setExpanded(true)}>
+          <button
+            type="button"
+            className="msg-preview"
+            aria-expanded={false}
+            title={toggleLabel}
+            onClick={toggleExpanded}
+          >
             <pre className="msg-body">{highlighted}</pre>
           </button>
         )}

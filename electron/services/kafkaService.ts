@@ -1,5 +1,15 @@
-import { Kafka, logLevel, type Admin, type Consumer, type Producer, type KafkaConfig } from 'kafkajs'
+import {
+  Kafka,
+  logLevel,
+  type Admin,
+  type Consumer,
+  type Producer,
+  type KafkaConfig,
+} from 'kafkajs'
+// CJS: CompressionCodecs/Types are not reliable named ESM exports — use default.
+import kafkajs from 'kafkajs'
 import { SchemaRegistry, SchemaType } from '@kafkajs/confluent-schema-registry'
+import SnappyCodec from 'kafkajs-snappy'
 import http from 'node:http'
 import https from 'node:https'
 import { URL } from 'node:url'
@@ -21,6 +31,9 @@ import type {
   TailRequest,
   TopicInfo,
 } from '../types'
+
+// KafkaJS core only ships GZIP; local stacks often produce Snappy.
+kafkajs.CompressionCodecs[kafkajs.CompressionTypes.Snappy] = SnappyCodec
 import {
   detectFormat,
   extractConfluentSchemaId,
@@ -362,17 +375,14 @@ export class KafkaService {
     const startFrom =
       request.startFrom ??
       (request.fromBeginning === false ? 'end' : 'beginning')
-    const hasSearch = Boolean(
+    const hasContentFilter = Boolean(
       request.search?.trim() ||
         request.searchKey?.trim() ||
         request.searchHeaderKey?.trim() ||
-        request.searchHeaderValue?.trim() ||
-        request.timeFrom != null ||
-        request.timeTo != null,
+        request.searchHeaderValue?.trim(),
     )
-    // Safety cap only: normal exit is "caught up to snapshot high" / hit limit.
-    // Beginning needs a bit more time for assign + seek to low.
-    const waitMs = hasSearch ? 6_000 : startFrom === 'beginning' ? 5_000 : 2_500
+    const hasTimeFilter = request.timeFrom != null || request.timeTo != null
+    const hasFilter = hasContentFilter || hasTimeFilter
 
     const topicOffsets = await this.admin!.fetchTopicOffsets(request.topic)
     const targetPartitions =
@@ -390,30 +400,55 @@ export class KafkaService {
       return []
     }
 
+    // Hard cap only — normal exit is caught-up / per-partition quota.
+    // Scales with limit × partitions; filters need a wider scan window.
+    const waitMs = Math.min(
+      30_000,
+      4_000 +
+        limit * 25 +
+        targetPartitions.length * 250 +
+        (hasFilter ? 4_000 : 0) +
+        (startFrom === 'beginning' ? 1_500 : 0),
+    )
+    const idleMs = hasFilter ? 1_200 : 800
+
     const groupId = `kafdesk-ui-${Date.now()}`
     this.consumer = this.kafka!.consumer({
       groupId,
-      // faster assign for one-shot UI reads
-      sessionTimeout: 10_000,
-      heartbeatInterval: 2_000,
-      maxWaitTimeInMs: 500,
+      sessionTimeout: 15_000,
+      heartbeatInterval: 3_000,
+      maxWaitTimeInMs: 400,
     })
     await this.consumer.connect()
+    // Always fromBeginning when we seek — starting at tip (fromBeginning:false)
+    // races the seek and often returns [] within the wait window.
     await this.consumer.subscribe({
       topic: request.topic,
-      fromBeginning: startFrom === 'beginning',
+      fromBeginning: true,
     })
 
     const seekPlan: Array<{ partition: number; offset: string }> = []
-    /** Planned first offset per partition — used for caught-up detection */
+    /** Inclusive first offset we accept per partition */
     const plannedStart = new Map<number, number>()
+    /**
+     * End without filters: tip window of `limit` per partition.
+     * End + content/time filters: wider lookback so matches outside the tip aren't missed.
+     */
+    const endLookback = hasFilter
+      ? Math.min(Math.max(approxAvailable, limit), Math.max(limit * 50, 2_000))
+      : limit
+
     if (startFrom === 'offset' && request.startOffset != null && request.startOffset !== '') {
       for (const partition of targetPartitions) {
-        seekPlan.push({ partition, offset: String(request.startOffset) })
-        plannedStart.set(partition, Number(request.startOffset) || 0)
+        const o = highByPart.get(partition)
+        const low = o ? Number(o.low) : 0
+        const high = o ? Number(o.high) : 0
+        const raw = Number(request.startOffset) || 0
+        const start = Math.max(low, Math.min(raw, high))
+        plannedStart.set(partition, start)
+        if (start < high) seekPlan.push({ partition, offset: String(start) })
       }
     } else if (request.timeFrom != null && Number.isFinite(request.timeFrom)) {
-      // Seek each partition to first message at/after timeFrom
       try {
         const byTs = await this.admin!.fetchTopicOffsetsByTimestamp(
           request.topic,
@@ -431,7 +466,6 @@ export class KafkaService {
           if (start < high) seekPlan.push({ partition, offset: String(start) })
         }
       } catch {
-        // fall back to beginning scan + client-side time filter
         for (const partition of targetPartitions) {
           const o = highByPart.get(partition)
           if (o) {
@@ -441,36 +475,27 @@ export class KafkaService {
         }
       }
     } else if (startFrom === 'end') {
-      // Latest window: from each partition tip take up to `limit` messages
-      // (not limit/n — that made End ≈ Beginning on small multi-partition topics).
-      // After consume we sort by timestamp and keep global `limit`.
       for (const partition of targetPartitions) {
         const o = highByPart.get(partition)
         if (!o) continue
         const high = Number(o.high)
         const low = Number(o.low)
-        const start = Math.max(low, high - limit)
+        const start = Math.max(low, high - endLookback)
         plannedStart.set(partition, start)
-        if (start < high) {
-          seekPlan.push({ partition, offset: String(start) })
-        }
+        if (start < high) seekPlan.push({ partition, offset: String(start) })
       }
     } else {
-      // beginning: always seek to low — subscribe(fromBeginning) alone is flaky
-      // for one-shot UI consumers and often returns [] within the wait window.
+      // beginning / default: seek each partition to low
       for (const partition of targetPartitions) {
         const o = highByPart.get(partition)
         if (!o) continue
         const low = Number(o.low)
         const high = Number(o.high)
         plannedStart.set(partition, low)
-        if (low < high) {
-          seekPlan.push({ partition, offset: String(low) })
-        }
+        if (low < high) seekPlan.push({ partition, offset: String(low) })
       }
     }
 
-    // Partitions whose window is empty finish immediately
     const finishedPartitions = new Set<number>()
     for (const partition of targetPartitions) {
       const o = highByPart.get(partition)
@@ -489,24 +514,10 @@ export class KafkaService {
       return []
     }
 
-    let seekAll: (() => void) | null = null
-    if (seekPlan.length) {
-      let sought = false
-      seekAll = () => {
-        if (sought || !this.consumer) return
-        sought = true
-        for (const s of seekPlan) {
-          this.consumer.seek({
-            topic: request.topic,
-            partition: s.partition,
-            offset: s.offset,
-          })
-        }
-      }
-      this.consumer.on(this.consumer.events.GROUP_JOIN, seekAll)
-    }
-
+    const consumer = this.consumer!
     const messages: KafkaMessageView[] = []
+    /** Accepted (in-window) messages per partition — used for beginning quota */
+    const takenByPart = new Map<number, number>()
     const filter = {
       search: request.search,
       searchKey: request.searchKey,
@@ -515,32 +526,92 @@ export class KafkaService {
       timeFrom: request.timeFrom,
       timeTo: request.timeTo,
     }
+    const newestFirst = startFrom === 'end'
 
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => resolve(), waitMs)
-      // If GROUP_JOIN already fired before the listener, retry seek shortly after run()
-      const seekFallback = seekAll ? setTimeout(() => seekAll?.(), 150) : null
       let settled = false
+      let runStarted = false
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
+      let hardTimer: ReturnType<typeof setTimeout> | null = null
+      let seekFallback1: ReturnType<typeof setTimeout> | null = null
+      let seekFallback2: ReturnType<typeof setTimeout> | null = null
+
+      const clearIdle = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer)
+          idleTimer = null
+        }
+      }
+      const teardown = () => {
+        if (hardTimer) clearTimeout(hardTimer)
+        clearIdle()
+        if (seekFallback1) clearTimeout(seekFallback1)
+        if (seekFallback2) clearTimeout(seekFallback2)
+      }
       const done = () => {
         if (settled) return
         settled = true
-        clearTimeout(timeout)
-        if (seekFallback) clearTimeout(seekFallback)
+        teardown()
         resolve()
+      }
+      const bumpIdle = () => {
+        if (settled) return
+        clearIdle()
+        idleTimer = setTimeout(() => done(), idleMs)
       }
       const checkCaughtUp = () => {
         if (finishedPartitions.size >= targetPartitions.length) done()
       }
 
-      this.consumer!
+      // Bind seek to THIS consumer instance — never touch a newer session's consumer.
+      const seekAll = () => {
+        if (settled || !runStarted || this.consumer !== consumer) return
+        try {
+          for (const s of seekPlan) {
+            consumer.seek({
+              topic: request.topic,
+              partition: s.partition,
+              offset: s.offset,
+            })
+          }
+        } catch {
+          /* seek before group ready / after disconnect — ignore */
+        }
+      }
+      if (seekPlan.length) {
+        consumer.on(consumer.events.GROUP_JOIN, seekAll)
+      }
+
+      hardTimer = setTimeout(() => done(), waitMs)
+
+      runStarted = true
+      consumer
         .run({
+          partitionsConsumedConcurrently: Math.min(targetPartitions.length, 8),
           eachMessage: async ({ topic, partition, message }) => {
+            if (settled) return
             if (request.partitions && !request.partitions.includes(partition)) return
 
-            // Caught-up tracking against the snapshot high watermark,
-            // independent of whether this message matches the filter
             const o = highByPart.get(partition)
-            if (o && Number(message.offset) >= Number(o.high) - 1) {
+            const high = o ? Number(o.high) : 0
+            const offset = Number(message.offset)
+            const start = plannedStart.get(partition)
+
+            // Drop anything before our planned window (pre-seek reads from low).
+            // Still bump idle — active scanning must not look "stuck".
+            if (start != null && offset < start) {
+              bumpIdle()
+              if (o && offset >= high - 1) {
+                finishedPartitions.add(partition)
+                checkCaughtUp()
+              }
+              return
+            }
+
+            bumpIdle()
+
+            // Hit tip → partition done
+            if (o && offset >= high - 1) {
               finishedPartitions.add(partition)
             }
 
@@ -550,27 +621,60 @@ export class KafkaService {
             }
 
             const view = await this.toMessageView(topic, partition, message)
+            if (settled) return
             if (!matchesSearch(view, filter)) {
               checkCaughtUp()
               return
             }
 
             messages.push(view)
-            // For "end" collect the full tip windows first, then trim by time.
-            // Early stop would bias toward whichever partition delivers first.
-            if (startFrom !== 'end' && messages.length >= limit) {
+            const taken = (takenByPart.get(partition) ?? 0) + 1
+            takenByPart.set(partition, taken)
+
+            // Beginning (no filter): per-partition quota of `limit`, then merge-sort.
+            // Avoids global early-stop bias and reading the entire topic.
+            if (!hasFilter && startFrom === 'beginning' && taken >= limit) {
+              finishedPartitions.add(partition)
+            }
+
+            // Filtered beginning: stop once we have enough matches globally
+            if (hasFilter && startFrom !== 'end' && messages.length >= limit) {
               done()
               return
             }
+
+            // Filtered end: enough matches + all tips reached → done (sort keeps newest)
+            if (
+              hasFilter &&
+              startFrom === 'end' &&
+              messages.length >= limit &&
+              finishedPartitions.size >= targetPartitions.length
+            ) {
+              done()
+              return
+            }
+
             checkCaughtUp()
           },
         })
-        .catch(reject)
+        .catch((err) => {
+          if (settled) return
+          settled = true
+          teardown()
+          reject(err)
+        })
+
+      // Fallbacks only after run() — seek before run crashes the main process.
+      if (seekPlan.length) {
+        seekFallback1 = setTimeout(() => seekAll(), 50)
+        seekFallback2 = setTimeout(() => seekAll(), 200)
+        setTimeout(() => bumpIdle(), 300)
+      } else {
+        bumpIdle()
+      }
     })
 
     await this.stopConsumer()
-    // beginning/offset → oldest first; end → newest first (so Start from is visible)
-    const newestFirst = startFrom === 'end'
     return messages
       .sort((a, b) => {
         const ta = Number(a.timestamp)

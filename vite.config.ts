@@ -13,6 +13,8 @@ export default defineConfig({
             rollupOptions: {
               external: [
                 'kafkajs',
+                'kafkajs-snappy',
+                'snappyjs',
                 '@kafkajs/confluent-schema-registry',
                 'avsc',
               ],
