@@ -38,7 +38,8 @@ npm run dev
 ```
 
 ```bash
-npm run build:mac   # macOS
-npm run build:win   # Windows
+npm run build:mac     # macOS
+npm run build:win     # Windows
+npm run build:linux   # Linux (AppImage + deb)
 ```
 

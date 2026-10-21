@@ -11,7 +11,7 @@ permissions:
 # Builds:
 #   macOS  → arm64 (Apple Silicon) + x64 (Intel)  → dmg + zip + latest-mac.yml
 #   Windows → x64                                  → exe + latest.yml
-# Linux (AppImage/deb + latest-linux.yml) — later, separate job when needed.
+#   Linux  → x64                                   → AppImage + deb + latest-linux.yml
 
 jobs:
   build-mac:
@@ -83,8 +83,39 @@ jobs:
             release/latest.yml
           if-no-files-found: error
 
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Vite build
+        run: npx vite build
+
+      - name: Electron builder (linux x64 AppImage + deb)
+        run: npx electron-builder --linux --x64 --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.blockmap
+            release/latest-linux.yml
+          if-no-files-found: error
+
   publish:
-    needs: [build-mac, build-win]
+    needs: [build-mac, build-win, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

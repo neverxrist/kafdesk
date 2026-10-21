@@ -15,6 +15,7 @@
     "build": "tsc --noEmit && vite build && electron-builder --mac --win --publish never",
     "build:mac": "tsc --noEmit && vite build && electron-builder --mac --arm64 --x64 --publish never",
     "build:win": "tsc --noEmit && vite build && electron-builder --win --x64 --publish never",
+    "build:linux": "tsc --noEmit && vite build && electron-builder --linux --x64 --publish never",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit --pretty false"
   },
@@ -100,6 +101,25 @@
         }
       ],
       "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
