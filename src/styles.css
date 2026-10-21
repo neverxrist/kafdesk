@@ -1445,6 +1445,10 @@ input[type='checkbox'] {
 }
 
 .topic-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1521,19 +1525,43 @@ input[type='checkbox'] {
 .topic-filter-row {
   display: flex;
   gap: 0.35rem;
-  align-items: stretch;
+  align-items: center;
 }
 
 .topic-filter-row input {
   flex: 1;
   min-width: 0;
+  padding: 0.42rem 0.55rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
 }
 
 .topic-filter-save {
   flex: 0 0 auto;
-  padding: 0.35rem 0.55rem;
-  font-size: 0.72rem;
+  padding: 0.42rem 0.65rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
   white-space: nowrap;
+}
+
+.topic-only-pinned {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.topic-only-pinned input {
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .topic-filter-chips {

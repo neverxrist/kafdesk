@@ -3,7 +3,9 @@ import type { TopicInfo } from '../../electron/types'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
 import {
+  loadOnlyPinnedTopics,
   loadTopicFilters,
+  persistOnlyPinnedTopics,
   persistTopicFilters,
   type SavedTopicFilter,
 } from '../lib/topicFilters'
@@ -31,22 +33,38 @@ export default function TopicsSidebar({
   pinnedTopics: string[]
   onTogglePin: (name: string) => void
 }) {
-  const pinnedSet = new Set(pinnedTopics)
-  const pinned = filteredTopics.filter((t) => pinnedSet.has(t.name))
-  const dlq = filteredTopics.filter(
-    (t) => !pinnedSet.has(t.name) && isDlqTopic(t.name) && !isInternalTopic(t.name),
-  )
-  const internal = filteredTopics.filter(
-    (t) => !pinnedSet.has(t.name) && isInternalTopic(t.name),
-  )
-  const rest = filteredTopics.filter(
-    (t) =>
-      !pinnedSet.has(t.name) && !isDlqTopic(t.name) && !isInternalTopic(t.name),
-  )
-
   const [dlqOpen, setDlqOpen] = useState(false)
   const [internalOpen, setInternalOpen] = useState(false)
   const [savedFilters, setSavedFilters] = useState<SavedTopicFilter[]>(() => loadTopicFilters())
+  const [onlyPinned, setOnlyPinned] = useState(() => loadOnlyPinnedTopics())
+
+  const pinnedSet = new Set(pinnedTopics)
+  const pinned = filteredTopics.filter((t) => pinnedSet.has(t.name))
+  const dlq = onlyPinned
+    ? []
+    : filteredTopics.filter(
+        (t) => !pinnedSet.has(t.name) && isDlqTopic(t.name) && !isInternalTopic(t.name),
+      )
+  const internal = onlyPinned
+    ? []
+    : filteredTopics.filter((t) => !pinnedSet.has(t.name) && isInternalTopic(t.name))
+  const rest = onlyPinned
+    ? []
+    : filteredTopics.filter(
+        (t) =>
+          !pinnedSet.has(t.name) && !isDlqTopic(t.name) && !isInternalTopic(t.name),
+      )
+  const visibleCount = onlyPinned ? pinned.length : filteredTopics.length
+
+  function setOnlyPinnedPref(on: boolean) {
+    setOnlyPinned(on)
+    persistOnlyPinnedTopics(on)
+  }
+
+  // Can't keep "only pinned" on with nothing starred
+  useEffect(() => {
+    if (onlyPinned && pinnedTopics.length === 0) setOnlyPinnedPref(false)
+  }, [pinnedTopics.length, onlyPinned]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Open the fold that contains the selected topic
   useEffect(() => {
@@ -121,7 +139,7 @@ export default function TopicsSidebar({
   return (
     <section className="topics">
       <div className="field">
-        <label>{tr('topics', { n: filteredTopics.length })}</label>
+        <label>{tr('topics', { n: visibleCount })}</label>
         <div className="topic-filter-row">
           <input
             value={topicQuery}
@@ -165,9 +183,26 @@ export default function TopicsSidebar({
       </div>
       {!connected && <div className="empty">{tr('connectToSeeTopics')}</div>}
 
-      {pinned.length > 0 && (
+      {connected && onlyPinned && pinned.length === 0 && pinnedTopics.length > 0 && (
+        <div className="empty">{tr('onlyPinnedEmpty')}</div>
+      )}
+
+      {(pinned.length > 0 || (onlyPinned && pinnedTopics.length > 0)) && (
         <div className="topic-section">
-          <div className="topic-section-head">{tr('pinnedTopics')}</div>
+          <div className="topic-section-head">
+            <span>{tr('pinnedTopics')}</span>
+            {pinnedTopics.length > 0 && (
+              <label className="topic-only-pinned">
+                <input
+                  type="checkbox"
+                  checked={onlyPinned}
+                  disabled={!connected}
+                  onChange={(e) => setOnlyPinnedPref(e.target.checked)}
+                />
+                {tr('onlyPinnedTopics')}
+              </label>
+            )}
+          </div>
           {pinned.map(renderTopic)}
         </div>
       )}

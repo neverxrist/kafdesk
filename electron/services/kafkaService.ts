@@ -803,9 +803,10 @@ export class KafkaService {
     )
 
     const first = result[0]
+    // Produce API v3+ returns baseOffset; older APIs return offset.
     return {
       partition: first.partition,
-      offset: first.offset,
+      offset: first.offset ?? first.baseOffset,
       format: request.format,
       schemaId,
     }
@@ -885,7 +886,7 @@ export class KafkaService {
       const first = result[0]
       if (first) {
         lastPartition = first.partition
-        lastOffset = first.offset
+        lastOffset = first.offset ?? first.baseOffset
       }
     }
 

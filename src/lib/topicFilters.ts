@@ -1,10 +1,27 @@
 export const TOPIC_FILTERS_KEY = 'kafdesk.topicFilters.v1'
+export const ONLY_PINNED_TOPICS_KEY = 'kafdesk.onlyPinnedTopics'
 
 export interface SavedTopicFilter {
   id: string
   name: string
   query: string
   createdAt: number
+}
+
+export function loadOnlyPinnedTopics(): boolean {
+  try {
+    return localStorage.getItem(ONLY_PINNED_TOPICS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function persistOnlyPinnedTopics(on: boolean): void {
+  try {
+    localStorage.setItem(ONLY_PINNED_TOPICS_KEY, on ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
 }
 
 export function loadTopicFilters(): SavedTopicFilter[] {
