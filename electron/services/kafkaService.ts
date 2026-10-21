@@ -370,9 +370,9 @@ export class KafkaService {
         request.timeFrom != null ||
         request.timeTo != null,
     )
-    // Safety cap only: normal exit is "caught up to snapshot high" (below),
-    // not this timeout. Filtered scans used to always burn the full cap.
-    const waitMs = hasSearch ? 6_000 : 2_500
+    // Safety cap only: normal exit is "caught up to snapshot high" / hit limit.
+    // Beginning needs a bit more time for assign + seek to low.
+    const waitMs = hasSearch ? 6_000 : startFrom === 'beginning' ? 5_000 : 2_500
 
     const topicOffsets = await this.admin!.fetchTopicOffsets(request.topic)
     const targetPartitions =
@@ -456,9 +456,17 @@ export class KafkaService {
         }
       }
     } else {
+      // beginning: always seek to low — subscribe(fromBeginning) alone is flaky
+      // for one-shot UI consumers and often returns [] within the wait window.
       for (const partition of targetPartitions) {
         const o = highByPart.get(partition)
-        if (o) plannedStart.set(partition, Number(o.low))
+        if (!o) continue
+        const low = Number(o.low)
+        const high = Number(o.high)
+        plannedStart.set(partition, low)
+        if (low < high) {
+          seekPlan.push({ partition, offset: String(low) })
+        }
       }
     }
 
@@ -481,13 +489,14 @@ export class KafkaService {
       return []
     }
 
+    let seekAll: (() => void) | null = null
     if (seekPlan.length) {
       let sought = false
-      const seekAll = () => {
-        if (sought) return
+      seekAll = () => {
+        if (sought || !this.consumer) return
         sought = true
         for (const s of seekPlan) {
-          this.consumer!.seek({
+          this.consumer.seek({
             topic: request.topic,
             partition: s.partition,
             offset: s.offset,
@@ -509,11 +518,14 @@ export class KafkaService {
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => resolve(), waitMs)
+      // If GROUP_JOIN already fired before the listener, retry seek shortly after run()
+      const seekFallback = seekAll ? setTimeout(() => seekAll?.(), 150) : null
       let settled = false
       const done = () => {
         if (settled) return
         settled = true
         clearTimeout(timeout)
+        if (seekFallback) clearTimeout(seekFallback)
         resolve()
       }
       const checkCaughtUp = () => {

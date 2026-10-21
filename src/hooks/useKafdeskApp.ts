@@ -1012,6 +1012,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     const gen = ++consumeGenRef.current
     setLoadingMessages(true)
     setError(null)
+    // Clear immediately so switching beginning/end doesn't keep stale rows
+    setMessages([])
     try {
       if (tailing) {
         await window.kafdesk.tailStop()
