@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KafDesk</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #0f1419;
+        font-family: system-ui, -apple-system, sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: default;
+      }
+      .wrap {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+      }
+      img {
+        width: 88px;
+        height: 88px;
+        border-radius: 18px;
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      .name {
+        color: #f3f5f8;
+        font-size: 1.05rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .hint {
+        color: #a7b0c0;
+        font-size: 0.72rem;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.72;
+          transform: scale(0.96);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <img src="./icon.png" alt="KafDesk" />
+      <div class="name">KafDesk</div>
+      <div class="hint">Starting…</div>
+    </div>
+  </body>
+</html>

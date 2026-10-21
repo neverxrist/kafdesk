@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-electron
+release
+# Local-only Kafka/SR test stack (not part of the app)
+share/
+build/icon.iconset
+.idea
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+*.local
+
+# Cursor local agent config
+.cursor/

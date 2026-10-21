@@ -1,0 +1,34 @@
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+// Bundle fonts into the app — Google Fonts CDN makes packaged builds janky/offline-fragile
+import '@fontsource/ibm-plex-sans/400.css'
+import '@fontsource/ibm-plex-sans/500.css'
+import '@fontsource/ibm-plex-sans/600.css'
+import '@fontsource/ibm-plex-sans/700.css'
+import '@fontsource/ibm-plex-sans/cyrillic-400.css'
+import '@fontsource/ibm-plex-sans/cyrillic-500.css'
+import '@fontsource/ibm-plex-sans/cyrillic-600.css'
+import '@fontsource/ibm-plex-sans/cyrillic-700.css'
+import '@fontsource/ibm-plex-mono/400.css'
+import '@fontsource/ibm-plex-mono/500.css'
+import '@fontsource/ibm-plex-mono/600.css'
+import '@fontsource/ibm-plex-mono/cyrillic-400.css'
+import '@fontsource/ibm-plex-mono/cyrillic-500.css'
+import '@fontsource/ibm-plex-mono/cyrillic-600.css'
+import './styles.css'
+
+// Browser exploratory testing: Electron preload is absent in plain Vite
+if (import.meta.env.DEV && !(window as Window & { kafdesk?: unknown }).kafdesk) {
+  const { installMockKafdesk } = await import('./dev/mockKafdesk')
+  installMockKafdesk()
+}
+
+const savedTheme = localStorage.getItem('kafdesk.theme')
+document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'light' : 'dark')
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)

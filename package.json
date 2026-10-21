@@ -1,0 +1,160 @@
+{
+  "name": "kafdesk",
+  "productName": "KafDesk",
+  "desktopName": "KafDesk",
+  "version": "0.2.11",
+  "description": "Friendly Kafka desktop client with Avro / JSON / String support",
+  "author": {
+    "name": "KafDesk contributors",
+    "email": "kafdesk@users.noreply.github.com"
+  },
+  "main": "dist-electron/main.js",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "postinstall": "node scripts/patch-electron-name.mjs",
+    "patch:electron-name": "node scripts/patch-electron-name.mjs",
+    "build": "tsc --noEmit && vite build && electron-builder --mac --win --publish never",
+    "build:mac": "tsc --noEmit && vite build && electron-builder --mac --arm64 --x64 --publish never",
+    "build:win": "tsc --noEmit && vite build && electron-builder --win --x64 --publish never",
+    "build:linux": "tsc --noEmit && vite build && electron-builder --linux --x64 --publish never",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@kafkajs/confluent-schema-registry": "^3.9.0",
+    "avsc": "^5.7.9",
+    "electron-updater": "^6.8.9",
+    "kafkajs": "^2.2.4",
+    "kafkajs-snappy": "^1.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "electron": "^35.2.1",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.3",
+    "vite-plugin-electron": "^0.29.0",
+    "vite-plugin-electron-renderer": "^0.14.6"
+  },
+  "build": {
+    "appId": "app.kafdesk.desktop",
+    "productName": "KafDesk",
+    "copyright": "Copyright © KafDesk contributors",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "neverxrist",
+        "repo": "kafdesk",
+        "releaseType": "release"
+      }
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development",
+      "maintainer": "KafDesk contributors <kafdesk@users.noreply.github.com>",
+      "executableName": "kafdesk",
+      "syncDesktopName": true,
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "KafDesk"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 180
+        },
+        {
+          "x": 410,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 360,
+          "type": "file",
+          "path": "build/mac/Finish Install.command"
+        }
+      ]
+    }
+  }
+}

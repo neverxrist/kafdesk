@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="KafDesk">
+  <!-- transparent outside; only the squircle is drawn -->
+  <rect x="8" y="8" width="1008" height="1008" rx="228" fill="#12161c"/>
+  <g fill="#2dd4bf">
+    <rect x="110" y="373" width="190" height="34" rx="17"/>
+    <rect x="110" y="495" width="190" height="34" rx="17"/>
+    <rect x="110" y="617" width="190" height="34" rx="17"/>
+    <rect x="710" y="373" width="150" height="34" rx="17"/>
+    <rect x="710" y="495" width="150" height="34" rx="17"/>
+    <rect x="710" y="617" width="150" height="34" rx="17"/>
+    <polygon points="850,371 930,390 850,409"/>
+    <polygon points="850,493 930,512 850,531"/>
+    <polygon points="850,615 930,634 850,653"/>
+    <text x="512" y="560" text-anchor="middle" font-family="Arial Black, Helvetica Neue, Arial, sans-serif" font-size="620" font-weight="700">K</text>
+  </g>
+</svg>
