@@ -12,3 +12,6 @@ build/icon.iconset
 .env.*
 !.env.example
 *.local
+
+# Cursor local agent config
+.cursor/
