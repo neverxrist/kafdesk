@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { authService } from './auth/authService'
 import { kafkaService } from './services/kafkaService'
+import { isRunningUnderRosetta } from './services/macDmgUpdater'
 import {
   checkForUpdates,
   getUpdateSettings,
@@ -31,12 +32,6 @@ process.env.VITE_PUBLIC = app.isPackaged
 
 app.setName('KafDesk')
 
-// Keep UI timers/compositor closer to `npm run dev` (Vite http) behaviour when packaged.
-if (app.isPackaged) {
-  app.commandLine.appendSwitch('disable-renderer-backgrounding')
-  app.commandLine.appendSwitch('disable-background-timer-throttling')
-}
-
 let win: BrowserWindow | null = null
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 
@@ -56,20 +51,37 @@ function isMacAppTranslocated(): boolean {
   return process.platform === 'darwin' && /AppTranslocation/i.test(process.execPath)
 }
 
-async function warnIfMacTranslocated(parent: BrowserWindow | null): Promise<void> {
-  if (!app.isPackaged || !isMacAppTranslocated()) return
+async function warnIfMacPerfTrap(parent: BrowserWindow | null): Promise<void> {
+  if (!app.isPackaged) return
+
+  if (isRunningUnderRosetta()) {
+    const opts = {
+      type: 'warning' as const,
+      title: 'KafDesk — wrong Mac build',
+      message: 'Installed Intel (x64) build on Apple Silicon — running via Rosetta.',
+      detail:
+        'That makes the UI laggy (clicks ~0.5–1s).\n\n' +
+        'Fix: install the arm64 DMG from GitHub Releases:\n' +
+        'KafDesk-*-mac-arm64.dmg\n\n' +
+        'Drag to Applications → Replace → Finish Install / xattr, then open.',
+      buttons: ['OK'],
+    }
+    if (parent && !parent.isDestroyed()) await dialog.showMessageBox(parent, opts)
+    else await dialog.showMessageBox(opts)
+    return
+  }
+
+  if (!isMacAppTranslocated()) return
   const opts = {
     type: 'warning' as const,
     title: 'KafDesk — slow launch',
     message: 'macOS is running KafDesk from a temporary folder (App Translocation).',
     detail:
-      'That is why it feels less snappy than a local build (no quarantine).\n\n' +
       'Fix:\n' +
       '1. Quit KafDesk\n' +
       '2. Drag KafDesk.app alone into /Applications (Replace)\n' +
-      '3. Run “Finish Install” (or: xattr -cr /Applications/KafDesk.app)\n' +
-      '4. Open from Applications\n\n' +
-      'Also use the arm64 DMG on Apple Silicon — the x64 build runs under Rosetta and is slower.',
+      '3. Run Finish Install (or xattr -cr /Applications/KafDesk.app)\n' +
+      '4. Open from Applications',
     buttons: ['OK'],
   }
   if (parent && !parent.isDestroyed()) await dialog.showMessageBox(parent, opts)
@@ -94,7 +106,6 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      backgroundThrottling: false,
     },
   })
 
@@ -268,7 +279,7 @@ app.whenReady().then(() => {
   createWindow()
   // Do NOT xattr -cr the running .app — recursive clear hammers disk and lags UI ~0.5–1s.
   // Quarantine is cleared by Finish Install / Terminal before first open.
-  setTimeout(() => void warnIfMacTranslocated(win), 1_500)
+  setTimeout(() => void warnIfMacPerfTrap(win), 1_500)
   // Forward update status to renderer
   onUpdateStatus((s) => {
     if (win && !win.isDestroyed()) win.webContents.send('app:updateStatus', s)

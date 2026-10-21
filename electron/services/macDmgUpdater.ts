@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, shell } from 'electron'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import https from 'node:https'
 import http from 'node:http'
@@ -24,8 +24,26 @@ function cmpSemver(a: string, b: string): number {
   return 0
 }
 
-function macArch(): 'arm64' | 'x64' {
-  return process.arch === 'arm64' ? 'arm64' : 'x64'
+/** True Apple Silicon even when this process is the x64 binary under Rosetta. */
+export function isAppleSilicon(): boolean {
+  if (process.platform !== 'darwin') return false
+  if (process.arch === 'arm64') return true
+  try {
+    const r = spawnSync('sysctl', ['-n', 'hw.optional.arm64'], { encoding: 'utf8' })
+    return r.status === 0 && r.stdout.trim() === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Prefer native arm64 DMG on M-series — process.arch is x64 under Rosetta. */
+export function macArch(): 'arm64' | 'x64' {
+  if (process.arch === 'arm64' || isAppleSilicon()) return 'arm64'
+  return 'x64'
+}
+
+export function isRunningUnderRosetta(): boolean {
+  return process.platform === 'darwin' && process.arch === 'x64' && isAppleSilicon()
 }
 
 function httpGetJson<T>(url: string): Promise<T> {
