@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, shell } from 'electron'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import https from 'node:https'
 import http from 'node:http'
@@ -173,7 +174,40 @@ export function getPendingMacDmg(): PendingMacUpdate | null {
   return readPending()
 }
 
+function cleanupInstallArtifacts(dmgPath?: string | null): void {
+  const downloads = app.getPath('downloads')
+  const victims = [
+    dmgPath,
+    path.join(downloads, 'KafDesk Finish Install.command'),
+    path.join(downloads, 'KafDesk-after-install.txt'),
+  ]
+  for (const f of victims) {
+    if (!f) continue
+    try {
+      if (fs.existsSync(f)) fs.unlinkSync(f)
+    } catch {
+      /* ignore */
+    }
+  }
+  // Any leftover KafDesk-*.dmg in Downloads
+  try {
+    for (const name of fs.readdirSync(downloads)) {
+      if (/^KafDesk.*\.dmg$/i.test(name)) {
+        try {
+          fs.unlinkSync(path.join(downloads, name))
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export function clearPendingMacDmg(): void {
+  const pending = readPending()
+  cleanupInstallArtifacts(pending?.path)
   writePending(null)
 }
 
@@ -191,22 +225,85 @@ function ensureDmgInDownloads(dmgPath: string): string {
 }
 
 const FINISH_INSTALL_SCRIPT = `#!/bin/bash
-# Clear Gatekeeper quarantine so the first open is not a multi-minute scan.
+# Clear Gatekeeper quarantine; unmount & delete the DMG from Downloads.
+# Run AFTER dragging KafDesk.app into Applications — do not open the app first.
 set -euo pipefail
 APP="/Applications/KafDesk.app"
+DOWNLOADS="\${HOME}/Downloads"
 if [[ ! -d "$APP" ]]; then
   osascript -e 'display dialog "Сначала перетащи KafDesk.app в Applications (Replace), потом снова запусти этот скрипт." buttons {"OK"} default button 1 with title "KafDesk"'
   exit 1
 fi
 xattr -cr "$APP" 2>/dev/null || true
+for vol in /Volumes/KafDesk*; do
+  if [[ -d "$vol" ]]; then
+    hdiutil detach "$vol" -quiet 2>/dev/null || hdiutil detach "$vol" -force 2>/dev/null || true
+  fi
+done
+sleep 0.4
+rm -f "$DOWNLOADS"/KafDesk*.dmg 2>/dev/null || true
+rm -f "$DOWNLOADS/KafDesk Finish Install.command" 2>/dev/null || true
+rm -f "$DOWNLOADS/KafDesk-after-install.txt" 2>/dev/null || true
 open "$APP"
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+if [[ "$SELF" == "$DOWNLOADS/"* ]]; then
+  rm -f "$SELF" 2>/dev/null || true
+fi
 `
+
+const POST_INSTALL_CMDS = `xattr -cr /Applications/KafDesk.app
+open /Applications/KafDesk.app`
 
 /** Companion to the DMG: strip quarantine then open (avoids slow first Gatekeeper scan). */
 function writeFinishInstallHelper(): string {
   const dest = path.join(app.getPath('downloads'), 'KafDesk Finish Install.command')
   fs.writeFileSync(dest, FINISH_INSTALL_SCRIPT, { mode: 0o755 })
   return dest
+}
+
+/**
+ * Survives app.quit(): system dialog + clipboard with the Terminal one-liner.
+ * (Electron dialogs disappear when we exit.)
+ */
+function showPostInstallHelp(): void {
+  try {
+    clipboard.writeText(POST_INSTALL_CMDS)
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const notePath = path.join(app.getPath('downloads'), 'KafDesk-after-install.txt')
+    fs.writeFileSync(
+      notePath,
+      `KafDesk — после установки\n\n` +
+        `1. Перетащи KafDesk.app в Applications → Replace\n` +
+        `2. Не открывай app сразу — сначала в Terminal:\n\n` +
+        `${POST_INSTALL_CMDS}\n\n` +
+        `Или «KafDesk Finish Install.command» (снимет quarantine и удалит DMG).\n` +
+        `Без xattr первый старт очень долгий (Gatekeeper).\n`,
+      'utf8',
+    )
+  } catch {
+    /* ignore */
+  }
+
+  const scriptPath = path.join(app.getPath('temp'), 'kafdesk-post-install.applescript')
+  const applescript = `
+set msg to "1. Перетащи KafDesk.app в Applications → Replace" & return & return & ¬
+  "2. НЕ открывай app двойным кликом — сначала Terminal (⌘V, уже в буфере):" & return & return & ¬
+  "xattr -cr /Applications/KafDesk.app" & return & ¬
+  "open /Applications/KafDesk.app" & return & return & ¬
+  "Или «Finish Install» — он же удалит DMG из Downloads." & return & return & ¬
+  "Если открыть без xattr — первый старт будет очень долгим (Gatekeeper)."
+display dialog msg buttons {"OK"} default button 1 with title "KafDesk — после установки"
+`
+  try {
+    fs.writeFileSync(scriptPath, applescript, 'utf8')
+    spawn('osascript', [scriptPath], { detached: true, stdio: 'ignore' }).unref()
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -223,6 +320,8 @@ export function openMacDmgAndQuit(dmgPath: string, version?: string): void {
   } catch {
     /* ignore */
   }
+
+  showPostInstallHelp()
 
   void shell.openPath(visible).then((err) => {
     if (err) {
@@ -301,11 +400,10 @@ export async function offerOpenDmgDialog(
     title: 'KafDesk update',
     message: `KafDesk ${version} downloaded.`,
     detail:
-      'Like DBeaver: Open DMG mounts the disk image, then KafDesk quits.\n\n' +
-      '1. Drag KafDesk.app into Applications → Replace\n' +
-      '2. Double-click “Finish Install” / “KafDesk Finish Install.command”\n' +
-      '   (clears Gatekeeper quarantine — otherwise first open can take minutes)\n' +
-      '3. App opens from Applications\n\n' +
+      'Open DMG → KafDesk quits → drag into Applications (Replace).\n\n' +
+      'Then in Terminal (we’ll copy this and show a reminder):\n\n' +
+      `${POST_INSTALL_CMDS}\n\n` +
+      'Or double-click “Finish Install” on the DMG / in Downloads.\n' +
       'Connections and settings are kept.',
     buttons: ['Open DMG & quit', 'Later'],
     defaultId: 0,

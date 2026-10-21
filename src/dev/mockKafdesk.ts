@@ -224,6 +224,7 @@ export function installMockKafdesk(): void {
     storedCredentials: async () => ({ hasPassword: false }),
     forgetCredentials: async () => ({ ok: true }),
     checkForUpdates: async () => ({ state: 'dev' as const }),
+    getVersion: async () => '0.0.0-dev',
     updateStatus: async () => ({ state: 'dev' as const }),
     updateSettings: async () => ({ autoUpdate: true }),
     setAutoUpdate: async () => ({ autoUpdate: true }),

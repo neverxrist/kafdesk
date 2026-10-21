@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { UpdateStatus } from '../../../electron/types'
 import type { Theme } from '../../lib/connections'
 import type { useLocale } from '../../hooks/useLocale'
@@ -21,7 +22,7 @@ function updateText(tr: Tr, s: UpdateStatus): string {
     case 'not-available':
       return tr('updateNone')
     case 'downloading':
-      return `${tr('updateChecking')} ${s.percent ?? 0}%`
+      return tr('updateDownloading', { percent: String(s.percent ?? 0) })
     case 'error':
       return `${tr('updateError')}${s.message ? `: ${s.message}` : ''}`
     case 'idle':
@@ -50,10 +51,21 @@ export default function SettingsPanel({
   onSetAutoUpdate: (v: boolean) => void
   onCheckUpdates: () => void
 }) {
+  const [appVersion, setAppVersion] = useState<string>('')
+
+  useEffect(() => {
+    void window.kafdesk.getVersion?.().then(setAppVersion).catch(() => setAppVersion(''))
+  }, [])
+
   return (
     <div className="settings-pane">
       <section className="panel settings-block">
         <h2>{tr('updates')}</h2>
+        {appVersion ? (
+          <p className="settings-hint" style={{ marginTop: 0 }}>
+            {tr('appVersion', { version: appVersion })}
+          </p>
+        ) : null}
         <label className="settings-toggle">
           <input
             type="checkbox"

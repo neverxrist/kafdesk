@@ -1,5 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage } from 'electron'
-import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,26 +49,6 @@ function resolveAppIcon(): string | undefined {
         path.join(__dirname, '../public/icon.png'),
       ]
   return candidates.find((p) => Boolean(p) && fs.existsSync(p))
-}
-
-/** Packaged Mac: …/KafDesk.app */
-function macAppBundlePath(): string {
-  return path.resolve(process.execPath, '..', '..', '..')
-}
-
-/** Unsigned downloads get com.apple.quarantine → Gatekeeper scans ~100MB Electron on first open. */
-function stripMacQuarantineBestEffort(): void {
-  if (process.platform !== 'darwin' || !app.isPackaged) return
-  const bundle = macAppBundlePath()
-  if (!bundle.endsWith('.app') || !fs.existsSync(bundle)) return
-  try {
-    const check = spawnSync('xattr', ['-p', 'com.apple.quarantine', bundle], { encoding: 'utf8' })
-    if (check.status !== 0) return
-  } catch {
-    return
-  }
-  const child = spawn('xattr', ['-cr', bundle], { detached: true, stdio: 'ignore' })
-  child.unref()
 }
 
 /** macOS copies quarantined apps to a random path — feels laggy vs a local build. */
@@ -280,14 +259,15 @@ function registerIpc() {
   ipcMain.handle('app:setAutoUpdate', async (e, enabled: boolean) =>
     setAutoUpdate(Boolean(enabled), BrowserWindow.fromWebContents(e.sender)),
   )
+  ipcMain.handle('app:getVersion', async () => app.getVersion())
 }
 
 app.whenReady().then(() => {
   authService.loadFromDisk()
   registerIpc()
   createWindow()
-  // After UI is up: clear quarantine so next cold start skips Gatekeeper rescan
-  setTimeout(() => stripMacQuarantineBestEffort(), 2_000)
+  // Do NOT xattr -cr the running .app — recursive clear hammers disk and lags UI ~0.5–1s.
+  // Quarantine is cleared by Finish Install / Terminal before first open.
   setTimeout(() => void warnIfMacTranslocated(win), 1_500)
   // Forward update status to renderer
   onUpdateStatus((s) => {

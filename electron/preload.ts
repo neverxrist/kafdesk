@@ -96,6 +96,7 @@ const api = {
   updateSettings: () => ipcRenderer.invoke('app:updateSettings') as Promise<UpdateSettings>,
   setAutoUpdate: (enabled: boolean) =>
     ipcRenderer.invoke('app:setAutoUpdate', enabled) as Promise<UpdateSettings>,
+  getVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,
   onUpdateStatus: (cb: (s: UpdateStatus) => void) => {
     const listener = (_event: IpcRendererEvent, s: UpdateStatus) => cb(s)
     ipcRenderer.on('app:updateStatus', listener)
