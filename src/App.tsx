@@ -213,7 +213,7 @@ export default function App() {
               <ConsumePanel
                 tr={tr}
                 topicDetails={a.topicDetails}
-                topicLag={a.topicLag}
+                topicGroupLags={a.topicGroupLags}
                 messages={a.messages}
                 selectedTopic={a.selectedTopic}
                 busy={a.loadingMessages}

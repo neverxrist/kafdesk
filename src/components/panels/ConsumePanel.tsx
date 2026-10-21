@@ -336,7 +336,7 @@ function groupByPartition(
 export default function ConsumePanel({
   tr,
   topicDetails,
-  topicLag,
+  topicGroupLags,
   messages,
   selectedTopic,
   busy,
@@ -348,7 +348,7 @@ export default function ConsumePanel({
 }: {
   tr: Tr
   topicDetails: TopicInfo | null
-  topicLag: number | null
+  topicGroupLags: Array<{ groupId: string; totalLag: number }> | null
   messages: KafkaMessageView[]
   selectedTopic: string | null
   busy?: boolean
@@ -428,23 +428,69 @@ export default function ConsumePanel({
   return (
     <section className="messages">
       {topicDetails && (
-        <div className="panel" style={{ marginBottom: '0.9rem' }}>
+        <div className="panel messages-topic-panel">
           <div className="messages-panel-head">
-            <h2>
-              {topicDetails.name}
-              {topicDetails.approxMessages != null && (
-                <span className="topic-meta">
-                  {' '}
-                  · {tr('msgsApprox', { n: topicDetails.approxMessages })}
-                </span>
+            <div className="topic-head-text">
+              <div className="topic-title-row">
+                <h2>
+                  {topicDetails.name}
+                  {topicDetails.approxMessages != null && (
+                    <span className="topic-meta">
+                      {' '}
+                      · {tr('msgsApprox', { n: topicDetails.approxMessages })}
+                    </span>
+                  )}
+                </h2>
+                <div className="partitions">
+                  {topicDetails.partitions.map((p) => {
+                    const hidden = hiddenPartitions.has(p.partitionId)
+                    const offsets = tr('partitionOffsets', {
+                      low: p.offsetLow ?? '?',
+                      high: p.offsetHigh ?? '?',
+                    })
+                    return (
+                      <button
+                        key={p.partitionId}
+                        type="button"
+                        className={`chip partition-chip${hidden ? ' muted' : ' active'}`}
+                        title={
+                          hidden
+                            ? tr('partitionFilterOff')
+                            : `${tr('partitionFilterOn', { id: p.partitionId })} · ${offsets}`
+                        }
+                        aria-pressed={!hidden}
+                        onClick={() => togglePartition(p.partitionId)}
+                      >
+                        <strong>p{p.partitionId}</strong>
+                        <span className="partition-msgs">
+                          ≈{p.approxMessages ?? '?'}
+                        </span>
+                        <span className="partition-offsets">{offsets}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              {topicGroupLags != null && (
+                <div className="topic-lag-row" title={tr('topicLagLabel')}>
+                  <span className="topic-lag-label">{tr('topicLagLabel')}</span>
+                  {topicGroupLags.length === 0 ? (
+                    <span className="topic-lag-empty">{tr('topicLagNone')}</span>
+                  ) : (
+                    topicGroupLags.map((g) => (
+                      <span
+                        key={g.groupId}
+                        className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
+                        title={`${g.groupId}: ${g.totalLag}`}
+                      >
+                        <em>{g.groupId}</em>
+                        <strong>{g.totalLag}</strong>
+                      </span>
+                    ))
+                  )}
+                </div>
               )}
-              {topicLag != null && (
-                <span className="topic-meta topic-lag">
-                  {' '}
-                  · {tr('topicLag', { n: topicLag })}
-                </span>
-              )}
-            </h2>
+            </div>
             <div className="messages-panel-controls">
               <label className="message-group-opt">
                 <input
@@ -471,38 +517,6 @@ export default function ConsumePanel({
                 </button>
               </div>
             </div>
-          </div>
-          <div className="partitions">
-            {topicDetails.partitions.map((p) => {
-              const hidden = hiddenPartitions.has(p.partitionId)
-              return (
-                <button
-                  key={p.partitionId}
-                  type="button"
-                  className={`chip partition-chip${hidden ? ' muted' : ' active'}`}
-                  title={
-                    hidden
-                      ? tr('partitionFilterOff')
-                      : tr('partitionFilterOn', { id: p.partitionId })
-                  }
-                  aria-pressed={!hidden}
-                  onClick={() => togglePartition(p.partitionId)}
-                >
-                  <strong>
-                    {tr('partitionMsgs', {
-                      id: p.partitionId,
-                      n: p.approxMessages ?? '?',
-                    })}
-                  </strong>
-                  <span className="partition-offsets">
-                    {tr('partitionOffsets', {
-                      low: p.offsetLow ?? '?',
-                      high: p.offsetHigh ?? '?',
-                    })}
-                  </span>
-                </button>
-              )
-            })}
           </div>
         </div>
       )}

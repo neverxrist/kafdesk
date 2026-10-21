@@ -6,6 +6,23 @@ import { ConnectIcon, ReconnectIcon } from './ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
+function SidebarPanelIcon() {
+  return (
+    <svg
+      className="conn-toggle-icon"
+      width="18"
+      height="18"
+      viewBox="0 0 18 18"
+      fill="none"
+      aria-hidden
+    >
+      <rect x="1.5" y="2.5" width="15" height="13" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6.5 2.5v13" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="3" y="4.5" width="2.2" height="9" rx="0.4" fill="currentColor" opacity="0.85" />
+    </svg>
+  )
+}
+
 export default function TopBar({
   tr,
   theme,
@@ -68,12 +85,10 @@ export default function TopBar({
         type="button"
         className="conn-toggle"
         onClick={() => setSidebarOpen((v) => !v)}
-        title={tr('connections')}
+        title={tr('manageConnections')}
+        aria-label={tr('manageConnections')}
       >
-        <span className="conn-toggle-bars" aria-hidden>
-          ☰
-        </span>
-        {tr('connections')}
+        <SidebarPanelIcon />
       </button>
 
       <div className={`topbar-conn-wrap ${open ? 'open' : ''}`} ref={wrapRef}>
@@ -168,7 +183,7 @@ export default function TopBar({
           title={tr('settings')}
           aria-label={tr('settings')}
         >
-          ⚙ {tr('settings')}
+          ⚙
         </button>
         <button className="icon-btn" onClick={toggleLocale} type="button" title="Language">
           {tr('langSwitch')}

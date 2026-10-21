@@ -645,10 +645,11 @@ export class KafkaService {
   async getGroupOffsets(groupId: string, topic?: string): Promise<GroupOffsetEntry[]> {
     this.ensureAdmin()
     const topics = topic ? [topic] : undefined
+    // Raw commits: resolveOffsets:true turns -1 into high watermark and hides real lag.
     const offsets = await this.admin!.fetchOffsets({
       groupId,
       topics,
-      resolveOffsets: true,
+      resolveOffsets: false,
     })
 
     const result: GroupOffsetEntry[] = []
@@ -665,6 +666,10 @@ export class KafkaService {
         const hw = highByPart.get(p.partition)
         const current = Number(p.offset)
         const high = hw ? Number(hw.high) : undefined
+        const committed = Number.isFinite(current) && current >= 0
+        // When scoped to a topic, skip partitions with no commit — listing the topic
+        // in OffsetFetch returns -1 for every group, which is not real consumption.
+        if (topic && !committed) continue
         result.push({
           topic: t.topic,
           partition: p.partition,
@@ -672,7 +677,10 @@ export class KafkaService {
           metadata: p.metadata ?? undefined,
           low: hw?.low,
           high: hw?.high,
-          lag: high != null && !Number.isNaN(current) ? Math.max(0, high - current) : undefined,
+          lag:
+            committed && high != null && !Number.isNaN(high)
+              ? Math.max(0, high - current)
+              : undefined,
         })
       }
     }
@@ -687,11 +695,12 @@ export class KafkaService {
     for (const g of groups) {
       let offsets: Awaited<ReturnType<KafkaService['getGroupOffsets']>> = []
       try {
-        // Reuse per-partition lag calc; restrict to selected topic when given
         offsets = await this.getGroupOffsets(g.groupId, topic)
       } catch {
         offsets = []
       }
+      if (topic && offsets.length === 0) continue
+
       let totalLag = 0
       let maxPartitionLag = 0
       let worstTopic: string | undefined

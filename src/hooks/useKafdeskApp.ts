@@ -82,7 +82,10 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [topicQuery, setTopicQuery] = useState('')
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null)
   const [topicDetails, setTopicDetails] = useState<TopicInfo | null>(null)
-  const [topicLag, setTopicLag] = useState<number | null>(null)
+  /** Per consumer-group lag on the selected topic (committed offsets only). */
+  const [topicGroupLags, setTopicGroupLags] = useState<
+    Array<{ groupId: string; totalLag: number }> | null
+  >(null)
 
   const [messages, setMessages] = useState<KafkaMessageView[]>([])
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -623,7 +626,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setTailMessages([])
       setSelectedTopic(null)
       setTopicDetails(null)
-      setTopicLag(null)
+      setTopicGroupLags(null)
       setMessages([])
       setGroups([])
       setSelectedGroup(null)
@@ -686,7 +689,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       } else {
         setSelectedTopic(null)
         setTopicDetails(null)
-        setTopicLag(null)
+        setTopicGroupLags(null)
         setMessages([])
       }
       pushLog('info', `Reconnected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
@@ -711,7 +714,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setTopics([])
       setSelectedTopic(null)
       setTopicDetails(null)
-      setTopicLag(null)
+      setTopicGroupLags(null)
       setMessages([])
       setPingInfo(null)
       setGroups([])
@@ -820,7 +823,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTailMessages([])
     setDiffMessages([])
     setTopicDetails(null)
-    setTopicLag(null)
+    setTopicGroupLags(null)
     setError(null)
     filterStateRef.current = { ...filterStateRef.current, partitionFilter: 'all' }
     setPartitionFilter('all')
@@ -845,10 +848,13 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       void window.kafdesk
         .getLagSummary?.(name)
         .then((res) => {
-          if (selectedTopicRef.current === name) setTopicLag(res.totalLag)
+          if (selectedTopicRef.current !== name) return
+          setTopicGroupLags(
+            res.groups.map((g) => ({ groupId: g.groupId, totalLag: g.totalLag })),
+          )
         })
         .catch(() => {
-          if (selectedTopicRef.current === name) setTopicLag(null)
+          if (selectedTopicRef.current === name) setTopicGroupLags(null)
         })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -1346,7 +1352,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTab,
     selectedTopic,
     topicDetails,
-    topicLag,
+    topicGroupLags,
     filteredTopics,
     topicQuery,
     setTopicQuery,
