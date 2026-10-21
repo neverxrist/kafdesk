@@ -17,18 +17,24 @@ Installers: [GitHub Releases](https://github.com/neverxrist/kafdesk/releases).
 
 ### macOS (unsigned builds)
 
-CI builds are not Apple Developer–signed / notarized yet, so Gatekeeper may block the first launch (“Apple could not verify…” / «не содержит вредоносного ПО»).
+CI builds are not Apple Developer–signed / notarized yet. Gatekeeper quarantine on a ~100MB Electron app makes the **first** open very slow (or shows “Apple could not verify…”).
 
-1. Do **not** double-click. Right-click `KafDesk.app` → **Open** → confirm **Open**.
-2. Or: **System Settings → Privacy & Security** → find the blocked app notice → **Open Anyway**.
-3. Or in Terminal (adjust the path if needed):
+**Fast path (recommended):**
+
+1. Drag `KafDesk.app` from the DMG into Applications → **Replace**.
+2. Double-click **Finish Install** on the DMG (or `KafDesk Finish Install.command` in Downloads after an in-app update).
+3. That clears quarantine and opens the app.
+
+**Manual:**
 
 ```bash
 xattr -cr /Applications/KafDesk.app
 open /Applications/KafDesk.app
 ```
 
-**Updates (unsigned Mac):** like DBeaver — the app downloads the new DMG from Releases, opens it, and quits. Drag `KafDesk.app` into Applications → **Replace**, then open the new app (settings stay in user data). First open may still need Gatekeeper steps above.
+If macOS still blocks: **System Settings → Privacy & Security → Open Anyway**.
+
+**Updates:** like DBeaver — download DMG → open & quit → drag to Applications → run **Finish Install** (settings stay in user data).
 
 ## Dev
 

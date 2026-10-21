@@ -190,6 +190,25 @@ function ensureDmgInDownloads(dmgPath: string): string {
   }
 }
 
+const FINISH_INSTALL_SCRIPT = `#!/bin/bash
+# Clear Gatekeeper quarantine so the first open is not a multi-minute scan.
+set -euo pipefail
+APP="/Applications/KafDesk.app"
+if [[ ! -d "$APP" ]]; then
+  osascript -e 'display dialog "Сначала перетащи KafDesk.app в Applications (Replace), потом снова запусти этот скрипт." buttons {"OK"} default button 1 with title "KafDesk"'
+  exit 1
+fi
+xattr -cr "$APP" 2>/dev/null || true
+open "$APP"
+`
+
+/** Companion to the DMG: strip quarantine then open (avoids slow first Gatekeeper scan). */
+function writeFinishInstallHelper(): string {
+  const dest = path.join(app.getPath('downloads'), 'KafDesk Finish Install.command')
+  fs.writeFileSync(dest, FINISH_INSTALL_SCRIPT, { mode: 0o755 })
+  return dest
+}
+
 /**
  * DBeaver-style Mac update: open the DMG in Finder, then quit so the user can
  * drag KafDesk.app → Applications → Replace, and launch the new app.
@@ -199,6 +218,11 @@ export function openMacDmgAndQuit(dmgPath: string, version?: string): void {
   const visible = ensureDmgInDownloads(dmgPath)
   const ver = version ?? readPending()?.version
   if (ver) writePending({ path: visible, version: ver })
+  try {
+    writeFinishInstallHelper()
+  } catch {
+    /* ignore */
+  }
 
   void shell.openPath(visible).then((err) => {
     if (err) {
@@ -252,6 +276,11 @@ export async function checkAndDownloadMacDmg(
   )
 
   writePending({ path: dest, version: latest.version })
+  try {
+    writeFinishInstallHelper()
+  } catch {
+    /* ignore */
+  }
   const s: UpdateStatus = { state: 'downloaded', version: latest.version }
   emit(s)
 
@@ -273,10 +302,11 @@ export async function offerOpenDmgDialog(
     message: `KafDesk ${version} downloaded.`,
     detail:
       'Like DBeaver: Open DMG mounts the disk image, then KafDesk quits.\n\n' +
-      '1. Drag KafDesk.app into Applications\n' +
-      '2. Choose Replace\n' +
-      '3. Open the new KafDesk from Applications\n\n' +
-      'Connections and settings are kept (stored separately).',
+      '1. Drag KafDesk.app into Applications → Replace\n' +
+      '2. Double-click “Finish Install” / “KafDesk Finish Install.command”\n' +
+      '   (clears Gatekeeper quarantine — otherwise first open can take minutes)\n' +
+      '3. App opens from Applications\n\n' +
+      'Connections and settings are kept.',
     buttons: ['Open DMG & quit', 'Later'],
     defaultId: 0,
     cancelId: 1,

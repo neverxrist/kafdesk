@@ -64,8 +64,9 @@ body,
   font-weight: 500;
   font-size: 14.5px;
   letter-spacing: 0;
-  text-rendering: geometricPrecision;
-  -webkit-font-smoothing: subpixel-antialiased;
+  /* geometricPrecision + subpixel re-rasterize glyphs on scroll → janky packaged UI */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,

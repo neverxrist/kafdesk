@@ -135,7 +135,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [updateStatus, setUpdateStatus] = useState<import('../../electron/types').UpdateStatus>({
     state: 'idle',
   })
-  const [updateAuto, setUpdateAuto] = useState(true)
+  const [updateAuto, setUpdateAuto] = useState(false)
 
   const [tailing, setTailing] = useState(false)
   const [tailMessages, setTailMessages] = useState<KafkaMessageView[]>([])

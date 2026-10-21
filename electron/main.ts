@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage } from 'electron'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,6 +32,12 @@ process.env.VITE_PUBLIC = app.isPackaged
 
 app.setName('KafDesk')
 
+// Keep UI timers/compositor closer to `npm run dev` (Vite http) behaviour when packaged.
+if (app.isPackaged) {
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-background-timer-throttling')
+}
+
 let win: BrowserWindow | null = null
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 
@@ -45,6 +52,51 @@ function resolveAppIcon(): string | undefined {
   return candidates.find((p) => Boolean(p) && fs.existsSync(p))
 }
 
+/** Packaged Mac: …/KafDesk.app */
+function macAppBundlePath(): string {
+  return path.resolve(process.execPath, '..', '..', '..')
+}
+
+/** Unsigned downloads get com.apple.quarantine → Gatekeeper scans ~100MB Electron on first open. */
+function stripMacQuarantineBestEffort(): void {
+  if (process.platform !== 'darwin' || !app.isPackaged) return
+  const bundle = macAppBundlePath()
+  if (!bundle.endsWith('.app') || !fs.existsSync(bundle)) return
+  try {
+    const check = spawnSync('xattr', ['-p', 'com.apple.quarantine', bundle], { encoding: 'utf8' })
+    if (check.status !== 0) return
+  } catch {
+    return
+  }
+  const child = spawn('xattr', ['-cr', bundle], { detached: true, stdio: 'ignore' })
+  child.unref()
+}
+
+/** macOS copies quarantined apps to a random path — feels laggy vs a local build. */
+function isMacAppTranslocated(): boolean {
+  return process.platform === 'darwin' && /AppTranslocation/i.test(process.execPath)
+}
+
+async function warnIfMacTranslocated(parent: BrowserWindow | null): Promise<void> {
+  if (!app.isPackaged || !isMacAppTranslocated()) return
+  const opts = {
+    type: 'warning' as const,
+    title: 'KafDesk — slow launch',
+    message: 'macOS is running KafDesk from a temporary folder (App Translocation).',
+    detail:
+      'That is why it feels less snappy than a local build (no quarantine).\n\n' +
+      'Fix:\n' +
+      '1. Quit KafDesk\n' +
+      '2. Drag KafDesk.app alone into /Applications (Replace)\n' +
+      '3. Run “Finish Install” (or: xattr -cr /Applications/KafDesk.app)\n' +
+      '4. Open from Applications\n\n' +
+      'Also use the arm64 DMG on Apple Silicon — the x64 build runs under Rosetta and is slower.',
+    buttons: ['OK'],
+  }
+  if (parent && !parent.isDestroyed()) await dialog.showMessageBox(parent, opts)
+  else await dialog.showMessageBox(opts)
+}
+
 function createWindow() {
   const preloadPath = path.join(__dirname, 'preload.cjs')
   const icon = resolveAppIcon()
@@ -56,18 +108,24 @@ function createWindow() {
     minHeight: 640,
     title: 'KafDesk',
     backgroundColor: '#0f1419',
+    show: false,
     ...(icon ? { icon } : {}),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   })
 
   if (process.platform === 'darwin' && icon && app.dock) {
     app.dock.setIcon(nativeImage.createFromPath(icon))
   }
+
+  win.once('ready-to-show', () => {
+    win?.show()
+  })
 
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error('did-fail-load', { code, desc, url })
@@ -228,6 +286,9 @@ app.whenReady().then(() => {
   authService.loadFromDisk()
   registerIpc()
   createWindow()
+  // After UI is up: clear quarantine so next cold start skips Gatekeeper rescan
+  setTimeout(() => stripMacQuarantineBestEffort(), 2_000)
+  setTimeout(() => void warnIfMacTranslocated(win), 1_500)
   // Forward update status to renderer
   onUpdateStatus((s) => {
     if (win && !win.isDestroyed()) win.webContents.send('app:updateStatus', s)

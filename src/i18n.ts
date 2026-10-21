@@ -242,7 +242,7 @@ const dict = {
     updateNone: 'You are up to date',
     updateError: 'Update check failed',
     updateUnsigned:
-      'Unsigned Mac: download DMG → Open DMG & quit → drag KafDesk to Applications (Replace) → open new app.',
+      'Unsigned Mac: DMG → drag to Applications → run Finish Install (clears Gatekeeper; otherwise first open is very slow).',
     msgKey: 'key',
     msgOffset: 'offset',
     msgTs: 'ts',
@@ -495,7 +495,7 @@ const dict = {
     updateNone: 'Установлена последняя версия',
     updateError: 'Не удалось проверить обновления',
     updateUnsigned:
-      'Unsigned Mac: скачать DMG → Open DMG & quit → перетащить KafDesk в Applications (Replace) → открыть новое приложение.',
+      'Unsigned Mac: DMG → в Applications → Finish Install (снимает Gatekeeper; иначе первый запуск очень долгий).',
     msgKey: 'key',
     msgOffset: 'offset',
     msgTs: 'ts',

@@ -17,7 +17,7 @@ const RELEASES_URL = 'https://github.com/neverxrist/kafdesk/releases'
 let status: UpdateStatus = { state: 'idle' }
 let listeners = new Set<(s: UpdateStatus) => void>()
 let wired = false
-let autoUpdateEnabled = true
+let autoUpdateEnabled = false
 let initialTimer: NodeJS.Timeout | null = null
 let intervalTimer: NodeJS.Timeout | null = null
 
@@ -29,9 +29,9 @@ function loadSettings(): UpdateSettings {
   try {
     const raw = fs.readFileSync(settingsPath(), 'utf8')
     const parsed = JSON.parse(raw) as Partial<UpdateSettings>
-    autoUpdateEnabled = parsed.autoUpdate !== false
+    autoUpdateEnabled = parsed.autoUpdate === true
   } catch {
-    autoUpdateEnabled = true
+    autoUpdateEnabled = false
   }
   return { autoUpdate: autoUpdateEnabled }
 }
@@ -144,7 +144,8 @@ function clearTimers() {
 function schedule(win: BrowserWindow | null) {
   clearTimers()
   if (!app.isPackaged || !autoUpdateEnabled) return
-  initialTimer = setTimeout(() => void checkForUpdates(win), 5_000)
+  // Defer past first-paint / Gatekeeper I/O so launch stays snappy
+  initialTimer = setTimeout(() => void checkForUpdates(win), 45_000)
   intervalTimer = setInterval(() => void checkForUpdates(win), 6 * 60 * 60 * 1000)
 }
 

@@ -2,7 +2,7 @@
   "name": "kafdesk",
   "productName": "KafDesk",
   "desktopName": "KafDesk",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Friendly Kafka desktop client with Avro / JSON / String support",
   "author": {
     "name": "KafDesk contributors",
@@ -24,6 +24,8 @@
     "typecheck": "tsc --noEmit --pretty false"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
     "@kafkajs/confluent-schema-registry": "^3.9.0",
     "avsc": "^5.7.9",
     "electron-updater": "^6.8.9",
@@ -132,6 +134,26 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "KafDesk"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 180
+        },
+        {
+          "x": 410,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 360,
+          "type": "file",
+          "path": "build/mac/Finish Install.command"
+        }
+      ]
     }
   }
 }
