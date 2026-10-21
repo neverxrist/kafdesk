@@ -1,5 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron'
-import { spawn } from 'node:child_process'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import fs from 'node:fs'
 import https from 'node:https'
 import http from 'node:http'
@@ -26,11 +25,6 @@ function cmpSemver(a: string, b: string): number {
 
 function macArch(): 'arm64' | 'x64' {
   return process.arch === 'arm64' ? 'arm64' : 'x64'
-}
-
-/** Path to KafDesk.app bundle */
-export function appBundlePath(): string {
-  return path.resolve(path.dirname(process.execPath), '..', '..')
 }
 
 function httpGetJson<T>(url: string): Promise<T> {
@@ -118,6 +112,40 @@ function downloadFile(
 type GhAsset = { name: string; browser_download_url: string; size: number }
 type GhRelease = { tag_name: string; assets: GhAsset[] }
 
+type PendingMacUpdate = { path: string; version: string }
+
+function pendingStorePath(): string {
+  return path.join(app.getPath('userData'), 'pending-mac-update.json')
+}
+
+function writePending(p: PendingMacUpdate | null) {
+  try {
+    const f = pendingStorePath()
+    if (!p) {
+      if (fs.existsSync(f)) fs.unlinkSync(f)
+      return
+    }
+    fs.writeFileSync(f, JSON.stringify(p), 'utf8')
+  } catch {
+    /* ignore */
+  }
+}
+
+function readPending(): PendingMacUpdate | null {
+  try {
+    const raw = fs.readFileSync(pendingStorePath(), 'utf8')
+    const parsed = JSON.parse(raw) as PendingMacUpdate
+    if (!parsed?.path || !parsed?.version) return null
+    if (!fs.existsSync(parsed.path)) {
+      writePending(null)
+      return null
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
 export async function findLatestMacDmg(): Promise<{
   version: string
   url: string
@@ -141,13 +169,49 @@ export function isNewerVersion(remote: string, local: string): boolean {
   return cmpSemver(remote, local) > 0
 }
 
-let pendingDmg: string | null = null
-let pendingVersion: string | null = null
+export function getPendingMacDmg(): PendingMacUpdate | null {
+  return readPending()
+}
 
-export function getPendingMacDmg(): { path: string; version: string } | null {
-  if (!pendingDmg || !pendingVersion) return null
-  if (!fs.existsSync(pendingDmg)) return null
-  return { path: pendingDmg, version: pendingVersion }
+export function clearPendingMacDmg(): void {
+  writePending(null)
+}
+
+/** Put DMG in Downloads so the user can find it (DBeaver-style). */
+function ensureDmgInDownloads(dmgPath: string): string {
+  const downloads = app.getPath('downloads')
+  const dest = path.join(downloads, path.basename(dmgPath))
+  if (path.resolve(dmgPath) === path.resolve(dest)) return dest
+  try {
+    fs.copyFileSync(dmgPath, dest)
+    return dest
+  } catch {
+    return dmgPath
+  }
+}
+
+/**
+ * DBeaver-style Mac update: open the DMG in Finder, then quit so the user can
+ * drag KafDesk.app → Applications → Replace, and launch the new app.
+ * Silent in-place swap + relaunch was unreliable on unsigned builds.
+ */
+export function openMacDmgAndQuit(dmgPath: string, version?: string): void {
+  const visible = ensureDmgInDownloads(dmgPath)
+  const ver = version ?? readPending()?.version
+  if (ver) writePending({ path: visible, version: ver })
+
+  void shell.openPath(visible).then((err) => {
+    if (err) {
+      // Fallback: reveal in Finder if openPath fails
+      shell.showItemInFolder(visible)
+    }
+  })
+
+  // Soft quit first so windows can close; force-exit shortly after.
+  setTimeout(() => {
+    app.quit()
+    setTimeout(() => app.exit(0), 1500)
+  }, 400)
 }
 
 export async function checkAndDownloadMacDmg(
@@ -167,6 +231,7 @@ export async function checkAndDownloadMacDmg(
 
   const current = app.getVersion()
   if (!isNewerVersion(latest.version, current)) {
+    writePending(null)
     const s: UpdateStatus = { state: 'not-available', version: latest.version }
     emit(s)
     return s
@@ -175,7 +240,7 @@ export async function checkAndDownloadMacDmg(
   emit({ state: 'available', version: latest.version })
   emit({ state: 'downloading', version: latest.version, percent: 0 })
 
-  const dest = path.join(app.getPath('temp'), latest.name)
+  const dest = path.join(app.getPath('downloads'), latest.name)
   try {
     if (fs.existsSync(dest)) fs.unlinkSync(dest)
   } catch {
@@ -186,81 +251,37 @@ export async function checkAndDownloadMacDmg(
     emit({ state: 'downloading', version: latest.version, percent }),
   )
 
-  pendingDmg = dest
-  pendingVersion = latest.version
+  writePending({ path: dest, version: latest.version })
   const s: UpdateStatus = { state: 'downloaded', version: latest.version }
   emit(s)
 
   if (win && !win.isDestroyed()) {
-    const res = await dialog.showMessageBox(win, {
-      type: 'info',
-      title: 'KafDesk update',
-      message: `KafDesk ${latest.version} downloaded.`,
-      detail:
-        'Restart now to replace the app from the DMG (no Apple signing required). Or choose Later and restart from Settings later.',
-      buttons: ['Restart now', 'Later'],
-      defaultId: 0,
-      cancelId: 1,
-    })
-    if (res.response === 0) {
-      installMacDmgAndRelaunch(dest)
-    }
+    await offerOpenDmgDialog(win, latest.version, dest)
   }
 
   return s
 }
 
-/** Spawn a helper that waits for this process to exit, swaps the .app from the DMG, and relaunches. */
-export function installMacDmgAndRelaunch(dmgPath: string): void {
-  const appPath = appBundlePath()
-  const scriptPath = path.join(app.getPath('temp'), 'kafdesk-apply-update.sh')
-  const appName = path.basename(appPath)
-  const parent = path.dirname(appPath)
-  const pid = process.pid
-
-  const script = `#!/bin/bash
-set -euo pipefail
-DMG=${JSON.stringify(dmgPath)}
-APP=${JSON.stringify(appPath)}
-APP_NAME=${JSON.stringify(appName)}
-PARENT=${JSON.stringify(parent)}
-PID=${pid}
-LOG="$HOME/Library/Logs/KafDesk-update.log"
-exec >>"$LOG" 2>&1
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) apply update start"
-
-while kill -0 "$PID" 2>/dev/null; do sleep 0.4; done
-sleep 0.8
-
-ATTACH_OUT=$(hdiutil attach -nobrowse -readonly "$DMG" || true)
-MOUNT=$(printf '%s\\n' "$ATTACH_OUT" | awk '/\\/Volumes\\//{print $NF; exit}')
-if [[ -z "\${MOUNT:-}" || ! -d "$MOUNT/$APP_NAME" ]]; then
-  echo "Failed to mount DMG or find $APP_NAME"
-  exit 1
-fi
-
-TMP="$PARENT/.\${APP_NAME}.updating"
-BACKUP="$PARENT/.\${APP_NAME}.bak"
-rm -rf "$TMP" "$BACKUP"
-ditto "$MOUNT/$APP_NAME" "$TMP"
-hdiutil detach "$MOUNT" -quiet || hdiutil detach "$MOUNT" -force || true
-
-mv "$APP" "$BACKUP"
-mv "$TMP" "$APP"
-xattr -cr "$APP" || true
-rm -rf "$BACKUP"
-rm -f "$DMG" || true
-
-echo "Relaunching $APP"
-open "$APP"
-echo "done"
-`
-
-  fs.writeFileSync(scriptPath, script, { mode: 0o755 })
-  const child = spawn('/bin/bash', [scriptPath], {
-    detached: true,
-    stdio: 'ignore',
+export async function offerOpenDmgDialog(
+  win: BrowserWindow,
+  version: string,
+  dmgPath: string,
+): Promise<void> {
+  const res = await dialog.showMessageBox(win, {
+    type: 'info',
+    title: 'KafDesk update',
+    message: `KafDesk ${version} downloaded.`,
+    detail:
+      'Like DBeaver: Open DMG mounts the disk image, then KafDesk quits.\n\n' +
+      '1. Drag KafDesk.app into Applications\n' +
+      '2. Choose Replace\n' +
+      '3. Open the new KafDesk from Applications\n\n' +
+      'Connections and settings are kept (stored separately).',
+    buttons: ['Open DMG & quit', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
   })
-  child.unref()
-  app.quit()
+  if (res.response === 0) {
+    openMacDmgAndQuit(dmgPath, version)
+  }
 }

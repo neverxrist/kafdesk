@@ -256,22 +256,22 @@ export default function ConnectionDrawer({
           </div>
 
           <div className={`field ${brokersOk ? '' : 'field-missing'}`.trim()}>
-            {reqLabel(tr('brokers'), brokersOk)}
+            <div className="field-label-row">
+              {reqLabel(tr('brokers'), brokersOk)}
+              <label className={`ssl-toggle${config.ssl ? ' on' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(config.ssl)}
+                  onChange={(e) => onUpdateConfig({ ssl: e.target.checked })}
+                />
+                {tr('ssl')}
+              </label>
+            </div>
             <input
               value={brokersText}
               onChange={(e) => setBrokersText(e.target.value)}
               aria-required
             />
-          </div>
-          <div className="row">
-            <label className="status">
-              <input
-                type="checkbox"
-                checked={Boolean(config.ssl)}
-                onChange={(e) => onUpdateConfig({ ssl: e.target.checked })}
-              />
-              {tr('ssl')}
-            </label>
           </div>
 
           {authMethod === 'sasl' && (

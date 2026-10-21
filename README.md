@@ -28,7 +28,7 @@ xattr -cr /Applications/KafDesk.app
 open /Applications/KafDesk.app
 ```
 
-**Updates (unsigned Mac):** the app can download the new DMG from Releases, replace `KafDesk.app` on restart, and relaunch (custom updater — no Apple Developer ID). First open of a brand-new install may still need Gatekeeper steps above.
+**Updates (unsigned Mac):** like DBeaver — the app downloads the new DMG from Releases, opens it, and quits. Drag `KafDesk.app` into Applications → **Replace**, then open the new app (settings stay in user data). First open may still need Gatekeeper steps above.
 
 ## Dev
 

@@ -2,7 +2,7 @@
   "name": "kafdesk",
   "productName": "KafDesk",
   "desktopName": "KafDesk",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Friendly Kafka desktop client with Avro / JSON / String support",
   "author": {
     "name": "KafDesk contributors",

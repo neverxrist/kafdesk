@@ -6,8 +6,10 @@ import path from 'node:path'
 import type { UpdateSettings, UpdateStatus } from '../types'
 import {
   checkAndDownloadMacDmg,
+  clearPendingMacDmg,
   getPendingMacDmg,
-  installMacDmgAndRelaunch,
+  isNewerVersion,
+  offerOpenDmgDialog,
 } from './macDmgUpdater'
 
 const RELEASES_URL = 'https://github.com/neverxrist/kafdesk/releases'
@@ -151,20 +153,20 @@ async function offerPendingMacInstall(win: BrowserWindow | null): Promise<Update
   if (!pending) {
     return status
   }
+  // Already running the downloaded version — drop stale pending DMG
+  if (!isNewerThanCurrent(pending.version)) {
+    clearPendingMacDmg()
+    return status
+  }
   emit({ state: 'downloaded', version: pending.version })
   if (win && !win.isDestroyed()) {
-    const res = await dialog.showMessageBox(win, {
-      type: 'info',
-      title: 'KafDesk update',
-      message: `KafDesk ${pending.version} is ready to install.`,
-      detail: 'Restart now to replace the app from the downloaded DMG.',
-      buttons: ['Restart now', 'Later'],
-      defaultId: 0,
-      cancelId: 1,
-    })
-    if (res.response === 0) installMacDmgAndRelaunch(pending.path)
+    await offerOpenDmgDialog(win, pending.version, pending.path)
   }
   return status
+}
+
+function isNewerThanCurrent(version: string): boolean {
+  return isNewerVersion(version, app.getVersion())
 }
 
 async function runMacDmgCheck(win: BrowserWindow | null): Promise<UpdateStatus> {

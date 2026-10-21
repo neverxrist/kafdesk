@@ -210,7 +210,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     const offUpdate = window.kafdesk.onUpdateStatus?.((s) => {
       setUpdateStatus(s)
       if (s.state === 'available') pushLog('info', `Update available: ${s.version ?? ''}`)
-      if (s.state === 'downloaded') pushLog('info', `Update downloaded: ${s.version ?? ''} — restart to install`)
+      if (s.state === 'downloaded')
+        pushLog('info', `Update downloaded: ${s.version ?? ''} — open DMG, replace in Applications`)
       if (s.state === 'error' && s.message) pushLog('warn', `Update check failed: ${s.message}`)
     })
     return () => {
