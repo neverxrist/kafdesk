@@ -1,7 +1,8 @@
 {
   "name": "kafdesk",
   "productName": "KafDesk",
-  "version": "0.2.2",
+  "desktopName": "KafDesk",
+  "version": "0.2.3",
   "description": "Friendly Kafka desktop client with Avro / JSON / String support",
   "author": {
     "name": "KafDesk contributors",
@@ -108,9 +109,9 @@
     "linux": {
       "icon": "build/icon.png",
       "category": "Development",
-      "desktopName": "KafDesk",
-      "syncDesktopName": true,
       "maintainer": "KafDesk contributors <kafdesk@users.noreply.github.com>",
+      "executableName": "kafdesk",
+      "syncDesktopName": true,
       "target": [
         {
           "target": "AppImage",
