@@ -1,19 +1,33 @@
-import {
-  Kafka,
-  logLevel,
-  type Admin,
-  type Consumer,
-  type Producer,
-  type KafkaConfig,
-} from 'kafkajs'
-// CJS: CompressionCodecs/Types are not reliable named ESM exports — use default.
-import kafkajs from 'kafkajs'
+import { Kafka, type Admin, type Consumer, type Producer } from 'kafkajs'
 import { SchemaRegistry, SchemaType } from '@kafkajs/confluent-schema-registry'
-import SnappyCodec from 'kafkajs-snappy'
-import http from 'node:http'
-import https from 'node:https'
-import { URL } from 'node:url'
 import { authService } from '../auth/authService'
+import {
+  initialFinishedPartitions,
+  matchesDecodedMessage,
+  notConnected,
+  planConsumeWindow,
+  PRODUCE_BATCH_MAX,
+  PRODUCE_TIMEOUT_MS,
+  produceBatchTooLarge,
+  schemaRegistryMissing,
+  type PartitionTimestampSeek,
+  type PartitionWatermark,
+} from '../domain'
+import {
+  buildKafkaConfig,
+  clusterAuthMode,
+} from '../infrastructure/kafka/buildKafkaConfig'
+import { decodeKafkaMessage } from '../infrastructure/kafka/decodeMessage'
+import {
+  encodeProduceBatch,
+  encodeProduceValue,
+} from '../infrastructure/kafka/encodeProduce'
+import '../infrastructure/kafka/registerSnappy'
+import { runConsumeWindow } from '../infrastructure/kafka/runConsumeWindow'
+import {
+  schemaRegistryAuthHeaders,
+  schemaRegistryHttp,
+} from '../infrastructure/schema-registry/http'
 import type {
   ClusterConfig,
   ConnectResult,
@@ -31,22 +45,8 @@ import type {
   TailRequest,
   TopicInfo,
 } from '../types'
-
-// KafkaJS core only ships GZIP; local stacks often produce Snappy.
-kafkajs.CompressionCodecs[kafkajs.CompressionTypes.Snappy] = SnappyCodec
-import {
-  detectFormat,
-  extractConfluentSchemaId,
-  parseJsonLoose,
-  toRawPreview,
-} from './messageFormat'
-import { encodeLocalAvro } from './localAvro'
 import { buildSchemaRegistryAgent } from './srTls'
 import { withTimeout } from './withTimeout'
-
-const CONSUME_LIMIT_MAX = 500
-const PRODUCE_TIMEOUT_MS = 45_000
-const SR_ENCODE_TIMEOUT_MS = 20_000
 
 function bearerMiddleware(getToken: () => Promise<string | null>) {
   return () => ({
@@ -80,40 +80,8 @@ export class KafkaService {
     this.schemaRegistryStatus = 'none'
     this.schemaRegistryError = undefined
 
-    const kafkaConfig: KafkaConfig = {
-      clientId: config.clientId || 'kafdesk',
-      brokers: config.brokers,
-      ssl: config.ssl || false,
-      logLevel: logLevel.ERROR,
-      connectionTimeout: 10_000,
-      requestTimeout: 30_000,
-    }
-
-    const authMode =
-      config.authMode ||
-      (config.sasl?.username ? 'sasl' : 'none')
-
-    if (authMode === 'oauthbearer') {
-      kafkaConfig.sasl = {
-        mechanism: 'oauthbearer',
-        oauthBearerProvider: async () => {
-          const token = await authService.getAccessToken(config.sso)
-          if (!token) throw new Error('SSO token missing — login via Keycloak first')
-          return { value: token }
-        },
-      }
-    } else if (authMode === 'sasl' && config.sasl?.username) {
-      const { mechanism, username, password } = config.sasl
-      if (mechanism === 'scram-sha-256') {
-        kafkaConfig.sasl = { mechanism: 'scram-sha-256', username, password }
-      } else if (mechanism === 'scram-sha-512') {
-        kafkaConfig.sasl = { mechanism: 'scram-sha-512', username, password }
-      } else {
-        kafkaConfig.sasl = { mechanism: 'plain', username, password }
-      }
-    }
-
-    this.kafka = new Kafka(kafkaConfig)
+    const authMode = clusterAuthMode(config)
+    this.kafka = new Kafka(buildKafkaConfig(config))
     this.admin = this.kafka.admin()
     this.producer = this.kafka.producer()
     await this.admin.connect()
@@ -242,12 +210,12 @@ export class KafkaService {
     const url = this.config?.schemaRegistryUrl?.replace(/\/$/, '')
     if (!url) return { status: 'none' }
 
-    const headers = await this.schemaRegistryHeaders()
+    const headers = await schemaRegistryAuthHeaders(this.config)
     headers.Accept = 'application/vnd.schemaregistry.v1+json'
 
     const started = Date.now()
     try {
-      const res = await this.schemaRegistryHttp(`${url}/subjects`, headers)
+      const res = await schemaRegistryHttp(`${url}/subjects`, headers, this.config)
       const ms = Date.now() - started
       if (res.status < 200 || res.status >= 300) {
         return { status: 'fail', ms, error: `HTTP ${res.status}` }
@@ -260,42 +228,6 @@ export class KafkaService {
         error: err instanceof Error ? err.message : String(err),
       }
     }
-  }
-
-  private schemaRegistryHttp(
-    url: string,
-    headers: Record<string, string>,
-  ): Promise<{ status: number; body: string }> {
-    const agent = buildSchemaRegistryAgent(this.config)
-    return new Promise((resolve, reject) => {
-      const u = new URL(url)
-      const lib = u.protocol === 'https:' ? https : http
-      const req = lib.request(
-        u,
-        {
-          method: 'GET',
-          headers,
-          agent: u.protocol === 'https:' ? agent : undefined,
-          timeout: 10_000,
-        },
-        (res) => {
-          const chunks: Buffer[] = []
-          res.on('data', (c) => chunks.push(c))
-          res.on('end', () =>
-            resolve({
-              status: res.statusCode || 0,
-              body: Buffer.concat(chunks).toString('utf8'),
-            }),
-          )
-        },
-      )
-      req.on('error', reject)
-      req.on('timeout', () => {
-        req.destroy()
-        reject(new Error('Schema Registry request timed out'))
-      })
-      req.end()
-    })
   }
 
   async listTopics(): Promise<TopicInfo[]> {
@@ -368,10 +300,6 @@ export class KafkaService {
     this.ensureAdmin()
     await this.stopConsumer()
 
-    const limit = Math.min(
-      CONSUME_LIMIT_MAX,
-      Math.max(1, Math.trunc(request.limit ?? 25) || 25),
-    )
     const startFrom =
       request.startFrom ??
       (request.fromBeginning === false ? 'end' : 'beginning')
@@ -382,39 +310,55 @@ export class KafkaService {
         request.searchHeaderValue?.trim(),
     )
     const hasTimeFilter = request.timeFrom != null || request.timeTo != null
-    const hasFilter = hasContentFilter || hasTimeFilter
 
-    const topicOffsets = await this.admin!.fetchTopicOffsets(request.topic)
-    const targetPartitions =
-      request.partitions?.length
-        ? request.partitions
-        : topicOffsets.map((o) => Number(o.partition))
+    const rawOffsets = await this.admin!.fetchTopicOffsets(request.topic)
+    const topicOffsets: PartitionWatermark[] = rawOffsets.map((o) => ({
+      partition: Number(o.partition),
+      low: o.low,
+      high: o.high,
+    }))
 
-    const highByPart = new Map(topicOffsets.map((o) => [Number(o.partition), o]))
-    const approxAvailable = targetPartitions.reduce((sum, p) => {
-      const o = highByPart.get(p)
-      if (!o) return sum
-      return sum + Math.max(0, Number(o.high) - Number(o.low))
-    }, 0)
-    if (approxAvailable === 0 && startFrom !== 'offset') {
+    let offsetsByTimestamp: PartitionTimestampSeek[] | null = null
+    let timeFromSeekFailed = false
+    if (request.timeFrom != null && Number.isFinite(request.timeFrom)) {
+      try {
+        const byTs = await this.admin!.fetchTopicOffsetsByTimestamp(
+          request.topic,
+          request.timeFrom,
+        )
+        offsetsByTimestamp = byTs.map((row) => ({
+          partition: Number(row.partition),
+          offset: String(row.offset),
+        }))
+      } catch {
+        timeFromSeekFailed = true
+      }
+    }
+
+    const plan = planConsumeWindow({
+      startFrom,
+      startOffset: request.startOffset,
+      limit: request.limit,
+      partitions: request.partitions,
+      offsetsByTimestamp,
+      timeFromSeekFailed,
+      hasContentFilter,
+      hasTimeFilter,
+      topicOffsets,
+    })
+    if (plan.empty) return []
+
+    const finishedPartitions = initialFinishedPartitions(
+      plan.targetPartitions,
+      topicOffsets,
+      plan.plannedStart,
+    )
+    if (finishedPartitions.size >= plan.targetPartitions.length) {
       return []
     }
 
-    // Hard cap only — normal exit is caught-up / per-partition quota.
-    // Scales with limit × partitions; filters need a wider scan window.
-    const waitMs = Math.min(
-      30_000,
-      4_000 +
-        limit * 25 +
-        targetPartitions.length * 250 +
-        (hasFilter ? 4_000 : 0) +
-        (startFrom === 'beginning' ? 1_500 : 0),
-    )
-    const idleMs = hasFilter ? 1_200 : 800
-
-    const groupId = `kafdesk-ui-${Date.now()}`
     this.consumer = this.kafka!.consumer({
-      groupId,
+      groupId: `kafdesk-ui-${Date.now()}`,
       sessionTimeout: 15_000,
       heartbeatInterval: 3_000,
       maxWaitTimeInMs: 400,
@@ -427,267 +371,21 @@ export class KafkaService {
       fromBeginning: true,
     })
 
-    const seekPlan: Array<{ partition: number; offset: string }> = []
-    /** Inclusive first offset we accept per partition */
-    const plannedStart = new Map<number, number>()
-    /**
-     * End without filters: tip window of `limit` per partition.
-     * End + content/time filters: wider lookback so matches outside the tip aren't missed.
-     */
-    const endLookback = hasFilter
-      ? Math.min(Math.max(approxAvailable, limit), Math.max(limit * 50, 2_000))
-      : limit
-
-    if (startFrom === 'offset' && request.startOffset != null && request.startOffset !== '') {
-      for (const partition of targetPartitions) {
-        const o = highByPart.get(partition)
-        const low = o ? Number(o.low) : 0
-        const high = o ? Number(o.high) : 0
-        const raw = Number(request.startOffset) || 0
-        const start = Math.max(low, Math.min(raw, high))
-        plannedStart.set(partition, start)
-        if (start < high) seekPlan.push({ partition, offset: String(start) })
-      }
-    } else if (request.timeFrom != null && Number.isFinite(request.timeFrom)) {
-      try {
-        const byTs = await this.admin!.fetchTopicOffsetsByTimestamp(
-          request.topic,
-          request.timeFrom,
-        )
-        for (const row of byTs) {
-          const partition = Number(row.partition)
-          if (!targetPartitions.includes(partition)) continue
-          const o = highByPart.get(partition)
-          if (!o) continue
-          const low = Number(o.low)
-          const high = Number(o.high)
-          const start = Math.max(low, Math.min(Number(row.offset), high))
-          plannedStart.set(partition, start)
-          if (start < high) seekPlan.push({ partition, offset: String(start) })
-        }
-      } catch {
-        for (const partition of targetPartitions) {
-          const o = highByPart.get(partition)
-          if (o) {
-            seekPlan.push({ partition, offset: String(o.low) })
-            plannedStart.set(partition, Number(o.low))
-          }
-        }
-      }
-    } else if (startFrom === 'end') {
-      for (const partition of targetPartitions) {
-        const o = highByPart.get(partition)
-        if (!o) continue
-        const high = Number(o.high)
-        const low = Number(o.low)
-        const start = Math.max(low, high - endLookback)
-        plannedStart.set(partition, start)
-        if (start < high) seekPlan.push({ partition, offset: String(start) })
-      }
-    } else {
-      // beginning / default: seek each partition to low
-      for (const partition of targetPartitions) {
-        const o = highByPart.get(partition)
-        if (!o) continue
-        const low = Number(o.low)
-        const high = Number(o.high)
-        plannedStart.set(partition, low)
-        if (low < high) seekPlan.push({ partition, offset: String(low) })
-      }
-    }
-
-    const finishedPartitions = new Set<number>()
-    for (const partition of targetPartitions) {
-      const o = highByPart.get(partition)
-      if (!o) {
-        finishedPartitions.add(partition)
-        continue
-      }
-      const high = Number(o.high)
-      const start = plannedStart.get(partition)
-      if (high <= Number(o.low) || (start != null && start >= high)) {
-        finishedPartitions.add(partition)
-      }
-    }
-    if (finishedPartitions.size >= targetPartitions.length) {
-      await this.stopConsumer()
-      return []
-    }
-
-    const consumer = this.consumer!
-    const messages: KafkaMessageView[] = []
-    /** Accepted (in-window) messages per partition — used for beginning quota */
-    const takenByPart = new Map<number, number>()
-    const filter = {
-      search: request.search,
-      searchKey: request.searchKey,
-      headerKey: request.searchHeaderKey,
-      headerValue: request.searchHeaderValue,
-      timeFrom: request.timeFrom,
-      timeTo: request.timeTo,
-    }
-    const newestFirst = startFrom === 'end'
-
-    await new Promise<void>((resolve, reject) => {
-      let settled = false
-      let runStarted = false
-      let idleTimer: ReturnType<typeof setTimeout> | null = null
-      let hardTimer: ReturnType<typeof setTimeout> | null = null
-      let seekFallback1: ReturnType<typeof setTimeout> | null = null
-      let seekFallback2: ReturnType<typeof setTimeout> | null = null
-
-      const clearIdle = () => {
-        if (idleTimer) {
-          clearTimeout(idleTimer)
-          idleTimer = null
-        }
-      }
-      const teardown = () => {
-        if (hardTimer) clearTimeout(hardTimer)
-        clearIdle()
-        if (seekFallback1) clearTimeout(seekFallback1)
-        if (seekFallback2) clearTimeout(seekFallback2)
-      }
-      const done = () => {
-        if (settled) return
-        settled = true
-        teardown()
-        resolve()
-      }
-      const bumpIdle = () => {
-        if (settled) return
-        clearIdle()
-        idleTimer = setTimeout(() => done(), idleMs)
-      }
-      const checkCaughtUp = () => {
-        if (finishedPartitions.size >= targetPartitions.length) done()
-      }
-
-      // Bind seek to THIS consumer instance — never touch a newer session's consumer.
-      const seekAll = () => {
-        if (settled || !runStarted || this.consumer !== consumer) return
-        try {
-          for (const s of seekPlan) {
-            consumer.seek({
-              topic: request.topic,
-              partition: s.partition,
-              offset: s.offset,
-            })
-          }
-        } catch {
-          /* seek before group ready / after disconnect — ignore */
-        }
-      }
-      if (seekPlan.length) {
-        consumer.on(consumer.events.GROUP_JOIN, seekAll)
-      }
-
-      hardTimer = setTimeout(() => done(), waitMs)
-
-      runStarted = true
-      consumer
-        .run({
-          partitionsConsumedConcurrently: Math.min(targetPartitions.length, 8),
-          eachMessage: async ({ topic, partition, message }) => {
-            if (settled) return
-            if (request.partitions && !request.partitions.includes(partition)) return
-
-            const o = highByPart.get(partition)
-            const high = o ? Number(o.high) : 0
-            const offset = Number(message.offset)
-            const start = plannedStart.get(partition)
-
-            // Drop anything before our planned window (pre-seek reads from low).
-            // Still bump idle — active scanning must not look "stuck".
-            if (start != null && offset < start) {
-              bumpIdle()
-              if (o && offset >= high - 1) {
-                finishedPartitions.add(partition)
-                checkCaughtUp()
-              }
-              return
-            }
-
-            bumpIdle()
-
-            // Hit tip → partition done
-            if (o && offset >= high - 1) {
-              finishedPartitions.add(partition)
-            }
-
-            if (!matchesRawPreFilter(message, filter)) {
-              checkCaughtUp()
-              return
-            }
-
-            const view = await this.toMessageView(topic, partition, message)
-            if (settled) return
-            if (!matchesSearch(view, filter)) {
-              checkCaughtUp()
-              return
-            }
-
-            messages.push(view)
-            const taken = (takenByPart.get(partition) ?? 0) + 1
-            takenByPart.set(partition, taken)
-
-            // Beginning (no filter): per-partition quota of `limit`, then merge-sort.
-            // Avoids global early-stop bias and reading the entire topic.
-            if (!hasFilter && startFrom === 'beginning' && taken >= limit) {
-              finishedPartitions.add(partition)
-            }
-
-            // Filtered beginning: stop once we have enough matches globally
-            if (hasFilter && startFrom !== 'end' && messages.length >= limit) {
-              done()
-              return
-            }
-
-            // Filtered end: enough matches + all tips reached → done (sort keeps newest)
-            if (
-              hasFilter &&
-              startFrom === 'end' &&
-              messages.length >= limit &&
-              finishedPartitions.size >= targetPartitions.length
-            ) {
-              done()
-              return
-            }
-
-            checkCaughtUp()
-          },
-        })
-        .catch((err) => {
-          if (settled) return
-          settled = true
-          teardown()
-          reject(err)
-        })
-
-      // Fallbacks only after run() — seek before run crashes the main process.
-      if (seekPlan.length) {
-        seekFallback1 = setTimeout(() => seekAll(), 50)
-        seekFallback2 = setTimeout(() => seekAll(), 200)
-        setTimeout(() => bumpIdle(), 300)
-      } else {
-        bumpIdle()
-      }
-    })
-
-    await this.stopConsumer()
-    return messages
-      .sort((a, b) => {
-        const ta = Number(a.timestamp)
-        const tb = Number(b.timestamp)
-        if (ta !== tb) return newestFirst ? tb - ta : ta - tb
-        if (a.partition !== b.partition) {
-          return newestFirst ? b.partition - a.partition : a.partition - b.partition
-        }
-        const oa = Number(a.offset)
-        const ob = Number(b.offset)
-        return newestFirst ? ob - oa : oa - ob
+    const consumer = this.consumer
+    try {
+      return await runConsumeWindow({
+        consumer,
+        isActive: () => this.consumer === consumer,
+        request,
+        plan,
+        topicOffsets,
+        finishedPartitions,
+        decode: (topic, partition, message) =>
+          this.toMessageView(topic, partition, message),
       })
-      .slice(0, limit)
+    } finally {
+      await this.stopConsumer()
+    }
   }
 
   async startTail(
@@ -717,7 +415,7 @@ export class KafkaService {
           if (!this.tailing) return
           if (request.partitions && !request.partitions.includes(partition)) return
           const view = await this.toMessageView(topic, partition, message)
-          if (!matchesSearch(view, filter)) return
+          if (!matchesDecodedMessage(view, filter)) return
           this.tailHandler?.(view)
         },
       })
@@ -873,34 +571,7 @@ export class KafkaService {
     request: ProduceRequest,
   ): Promise<{ partition: number; offset?: string; format: string; schemaId?: number }> {
     this.ensureProducer()
-
-    let value: Buffer | string
-    let schemaId: number | undefined
-    if (request.format === 'avro') {
-      if (!this.registry) throw new Error('Schema Registry is not configured')
-      if (!request.subject) throw new Error('Avro subject is required')
-      const payload = parseJsonLoose(request.value)
-      schemaId = await withTimeout(
-        this.registry.getLatestSchemaId(request.subject),
-        SR_ENCODE_TIMEOUT_MS,
-        'Schema Registry getLatestSchemaId',
-      )
-      value = await withTimeout(
-        this.registry.encode(schemaId, payload),
-        SR_ENCODE_TIMEOUT_MS,
-        'Schema Registry encode',
-      )
-    } else if (request.format === 'avro-local') {
-      if (!request.localSchema?.trim()) throw new Error('Local .avsc schema is required')
-      schemaId = request.localSchemaId ?? 0
-      value = encodeLocalAvro(request.localSchema, request.value, schemaId)
-    } else if (request.format === 'json') {
-      // normalize pretty/minified
-      const parsed = parseJsonLoose(request.value)
-      value = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
-    } else {
-      value = request.value
-    }
+    const { value, schemaId } = await encodeProduceValue(request, this.registry)
 
     const result = await withTimeout(
       this.producer!.send({
@@ -933,54 +604,11 @@ export class KafkaService {
     if (!request.messages.length) {
       return { sent: 0, format: request.format }
     }
-    if (request.messages.length > 2000) {
-      throw new Error('Bulk limit is 2000 messages per run')
+    if (request.messages.length > PRODUCE_BATCH_MAX) {
+      throw produceBatchTooLarge(PRODUCE_BATCH_MAX)
     }
 
-    let schemaId: number | undefined
-    const encoded: Array<{ key?: string; value: Buffer | string }> = []
-
-    if (request.format === 'avro') {
-      if (!this.registry) throw new Error('Schema Registry is not configured')
-      if (!request.subject) throw new Error('Avro subject is required')
-      schemaId = await withTimeout(
-        this.registry.getLatestSchemaId(request.subject),
-        SR_ENCODE_TIMEOUT_MS,
-        'Schema Registry getLatestSchemaId',
-      )
-      for (const m of request.messages) {
-        const payload = parseJsonLoose(m.value)
-        encoded.push({
-          key: m.key,
-          value: await withTimeout(
-            this.registry.encode(schemaId, payload),
-            SR_ENCODE_TIMEOUT_MS,
-            'Schema Registry encode',
-          ),
-        })
-      }
-    } else if (request.format === 'avro-local') {
-      if (!request.localSchema?.trim()) throw new Error('Local .avsc schema is required')
-      schemaId = request.localSchemaId ?? 0
-      for (const m of request.messages) {
-        encoded.push({
-          key: m.key,
-          value: encodeLocalAvro(request.localSchema, m.value, schemaId),
-        })
-      }
-    } else if (request.format === 'json') {
-      for (const m of request.messages) {
-        const parsed = parseJsonLoose(m.value)
-        encoded.push({
-          key: m.key,
-          value: typeof parsed === 'string' ? parsed : JSON.stringify(parsed),
-        })
-      }
-    } else {
-      for (const m of request.messages) {
-        encoded.push({ key: m.key, value: m.value })
-      }
-    }
+    const { encoded, schemaId } = await encodeProduceBatch(request, this.registry)
 
     let lastPartition: number | undefined
     let lastOffset: string | undefined
@@ -1018,8 +646,8 @@ export class KafkaService {
   async listSubjects(): Promise<string[]> {
     this.ensureRegistry()
     const host = this.config!.schemaRegistryUrl!.replace(/\/$/, '')
-    const headers = await this.schemaRegistryHeaders()
-    const res = await this.schemaRegistryHttp(`${host}/subjects`, headers)
+    const headers = await schemaRegistryAuthHeaders(this.config)
+    const res = await schemaRegistryHttp(`${host}/subjects`, headers, this.config)
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`Schema Registry error: ${res.status}`)
     }
@@ -1029,11 +657,12 @@ export class KafkaService {
   async getLatestSchema(subject: string): Promise<SchemaSubjectInfo> {
     this.ensureRegistry()
     const host = this.config!.schemaRegistryUrl!.replace(/\/$/, '')
-    const headers = await this.schemaRegistryHeaders()
+    const headers = await schemaRegistryAuthHeaders(this.config)
     headers.Accept = 'application/vnd.schemaregistry.v1+json'
-    const res = await this.schemaRegistryHttp(
+    const res = await schemaRegistryHttp(
       `${host}/subjects/${encodeURIComponent(subject)}/versions/latest`,
       headers,
+      this.config,
     )
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`Schema Registry error: ${res.status}`)
@@ -1054,194 +683,31 @@ export class KafkaService {
     }
   }
 
-  private async schemaRegistryHeaders(): Promise<Record<string, string>> {
-    const headers: Record<string, string> = {}
-    const authMode =
-      this.config?.authMode || (this.config?.sasl?.username ? 'sasl' : 'none')
-
-    if (authMode === 'oauthbearer') {
-      const token = await authService.getAccessToken(this.config?.sso)
-      if (token) headers.Authorization = `Bearer ${token}`
-      return headers
-    }
-
-    if (this.config?.schemaRegistryAuth?.username) {
-      const basic = Buffer.from(
-        `${this.config.schemaRegistryAuth.username}:${this.config.schemaRegistryAuth.password}`,
-      ).toString('base64')
-      headers.Authorization = `Basic ${basic}`
-    }
-    return headers
-  }
-
-  private async toMessageView(
+  private toMessageView(
     topic: string,
     partition: number,
-    message: {
-      offset: string
-      timestamp: string
-      key: Buffer | null
-      value: Buffer | null
-      headers?: Record<string, Buffer | string | undefined | (Buffer | string)[]>
-    },
+    message: Parameters<typeof decodeKafkaMessage>[2],
   ): Promise<KafkaMessageView> {
-    const valueBuf = message.value
-    const format = detectFormat(valueBuf)
-    const schemaId = valueBuf ? extractConfluentSchemaId(valueBuf) : undefined
-    let value: unknown = null
-
-    if (valueBuf) {
-      if (format === 'avro' && this.registry) {
-        try {
-          value = await this.registry.decode(valueBuf)
-        } catch (err) {
-          value = {
-            _decodeError: err instanceof Error ? err.message : String(err),
-            raw: toRawPreview(valueBuf, 'bytes'),
-          }
-        }
-      } else if (format === 'json') {
-        value = parseJsonLoose(valueBuf.toString('utf8'))
-      } else if (format === 'string') {
-        value = valueBuf.toString('utf8')
-      } else {
-        value = toRawPreview(valueBuf, 'bytes')
-      }
-    }
-
-    const headers: Record<string, string> = {}
-    if (message.headers) {
-      for (const [k, v] of Object.entries(message.headers)) {
-        if (v == null) continue
-        if (Array.isArray(v)) {
-          headers[k] = v.map((x) => (Buffer.isBuffer(x) ? x.toString('utf8') : String(x))).join(',')
-        } else {
-          headers[k] = Buffer.isBuffer(v) ? v.toString('utf8') : String(v)
-        }
-      }
-    }
-
-    return {
-      topic,
-      partition,
-      offset: message.offset,
-      timestamp: message.timestamp,
-      key: message.key ? message.key.toString('utf8') : null,
-      value,
-      rawPreview: toRawPreview(valueBuf, format),
-      format,
-      headers,
-      schemaId,
-    }
+    return decodeKafkaMessage(topic, partition, message, this.registry)
   }
 
   private ensureAdmin() {
-    if (!this.admin) throw new Error('Not connected to Kafka')
+    if (!this.admin) throw notConnected('Kafka')
   }
 
   private ensureProducer() {
-    if (!this.producer) throw new Error('Not connected to Kafka')
+    if (!this.producer) throw notConnected('Kafka')
   }
 
   private ensureKafka() {
-    if (!this.kafka) throw new Error('Not connected to Kafka')
+    if (!this.kafka) throw notConnected('Kafka')
   }
 
   private ensureRegistry() {
     if (!this.registry || !this.config?.schemaRegistryUrl) {
-      throw new Error('Schema Registry is not configured')
+      throw schemaRegistryMissing()
     }
   }
-}
-
-interface MessageFilter {
-  search?: string
-  searchKey?: string
-  headerKey?: string
-  headerValue?: string
-  timeFrom?: number
-  timeTo?: number
-}
-
-/** Cheap key/header/time check before Avro/JSON decode */
-function matchesRawPreFilter(
-  message: {
-    key: Buffer | null
-    timestamp: string
-    headers?: Record<string, Buffer | string | undefined | (Buffer | string)[]>
-  },
-  f: MessageFilter,
-): boolean {
-  const searchKey = f.searchKey?.trim().toLowerCase()
-  if (searchKey) {
-    const keyText = (message.key ? message.key.toString('utf8') : '').toLowerCase()
-    if (!keyText.includes(searchKey)) return false
-  }
-
-  const headerKey = f.headerKey?.trim().toLowerCase()
-  const headerValue = f.headerValue?.trim().toLowerCase()
-  if (headerKey || headerValue) {
-    const entries = Object.entries(message.headers || {})
-    const ok = entries.some(([k, v]) => {
-      if (v == null) return false
-      const lv = (Array.isArray(v)
-        ? v.map((x) => (Buffer.isBuffer(x) ? x.toString('utf8') : String(x))).join(',')
-        : Buffer.isBuffer(v)
-          ? v.toString('utf8')
-          : String(v)
-      ).toLowerCase()
-      if (headerKey && !k.toLowerCase().includes(headerKey)) return false
-      if (headerValue && !lv.includes(headerValue)) return false
-      return true
-    })
-    if (!ok) return false
-  }
-
-  if (f.timeFrom != null || f.timeTo != null) {
-    const raw = Number(message.timestamp)
-    if (!Number.isFinite(raw)) return false
-    const ts = raw < 1e12 ? raw * 1000 : raw
-    if (f.timeFrom != null && ts < f.timeFrom) return false
-    if (f.timeTo != null && ts > f.timeTo) return false
-  }
-
-  return true
-}
-
-function matchesSearch(view: KafkaMessageView, filter: string | MessageFilter, maybeKey?: string): boolean {
-  const f: MessageFilter =
-    typeof filter === 'string' ? { search: filter, searchKey: maybeKey } : filter
-  const search = f.search?.trim().toLowerCase()
-  const searchKey = f.searchKey?.trim().toLowerCase()
-  const headerKey = f.headerKey?.trim().toLowerCase()
-  const headerValue = f.headerValue?.trim().toLowerCase()
-
-  const keyText = (view.key || '').toLowerCase()
-  const haystack = `${view.key ?? ''} ${view.rawPreview} ${JSON.stringify(view.value)}`.toLowerCase()
-  if (searchKey && !keyText.includes(searchKey)) return false
-  if (search && !haystack.includes(search)) return false
-
-  if (headerKey || headerValue) {
-    const entries = Object.entries(view.headers || {})
-    const ok = entries.some(([k, v]) => {
-      const lk = k.toLowerCase()
-      const lv = String(v).toLowerCase()
-      if (headerKey && !lk.includes(headerKey)) return false
-      if (headerValue && !lv.includes(headerValue)) return false
-      return true
-    })
-    if (!ok) return false
-  }
-
-  if (f.timeFrom != null || f.timeTo != null) {
-    const tsRaw = Number(view.timestamp)
-    if (!Number.isFinite(tsRaw)) return false
-    const ts = tsRaw < 1e12 ? tsRaw * 1000 : tsRaw
-    if (f.timeFrom != null && ts < f.timeFrom) return false
-    if (f.timeTo != null && ts > f.timeTo) return false
-  }
-
-  return true
 }
 
 export const kafkaService = new KafkaService()

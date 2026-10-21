@@ -18,12 +18,6 @@ import '@fontsource/ibm-plex-mono/cyrillic-500.css'
 import '@fontsource/ibm-plex-mono/cyrillic-600.css'
 import './styles.css'
 
-// Browser exploratory testing: Electron preload is absent in plain Vite
-if (import.meta.env.DEV && !(window as Window & { kafdesk?: unknown }).kafdesk) {
-  const { installMockKafdesk } = await import('./dev/mockKafdesk')
-  installMockKafdesk()
-}
-
 const savedTheme = localStorage.getItem('kafdesk.theme')
 document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'light' : 'dark')
 

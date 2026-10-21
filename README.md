@@ -22,7 +22,7 @@ CI builds are not Apple Developer–signed / notarized yet. Gatekeeper quarantin
 **Fast path (recommended):**
 
 1. Drag `KafDesk.app` from the DMG into Applications → **Replace**.
-2. Double-click **Finish Install** on the DMG (or `KafDesk Finish Install.command` in Downloads after an in-app update).
+2. Double-click **Finish Install** on the DMG (or run `xattr -cr /Applications/KafDesk.app` in Terminal).
 3. That clears quarantine and opens the app.
 
 **Manual:**

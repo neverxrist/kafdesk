@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AuthSessionPublic,
   ClusterConfig,
-  ConsumeStartFrom,
   ConsumerGroupInfo,
   GroupOffsetEntry,
   KafkaMessageView,
@@ -36,27 +35,12 @@ import {
 import { mockFromAvroSchemaPretty } from '../lib/avroMock'
 import { expandProduceTemplate } from '../lib/produceVars'
 import { guessAvroSubject, messageBodyText, messageId } from '../lib/messageText'
-import { filterMessages } from '../lib/messageFilter'
+import { stripIpcError } from '../lib/ipcError'
 import type { AppLogEntry } from './useAppLogs'
+import { useConsumeFilters, type ConsumeFilterState } from './useConsumeFilters'
 
 export type { SavedConsumeQuery }
-
-function stripIpcError(raw: string): string {
-  return raw.replace(/^Error invoking remote method '[^']+':\s*/i, '').trim() || raw
-}
-
-export interface ConsumeFilterState {
-  search: string
-  searchKey: string
-  headerKey: string
-  headerValue: string
-  partitionFilter: string
-  startFrom: ConsumeStartFrom
-  startOffset: string
-  limit: number
-  timeFrom: string
-  timeTo: string
-}
+export type { ConsumeFilterState }
 
 export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string) => void) {
   const initial = useMemo(() => loadConnections(), [])
@@ -89,31 +73,39 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   const [messages, setMessages] = useState<KafkaMessageView[]>([])
   const [loadingMessages, setLoadingMessages] = useState(false)
-  const [search, setSearch] = useState('')
-  const [searchKey, setSearchKey] = useState('')
-  const [headerKey, setHeaderKey] = useState('')
-  const [headerValue, setHeaderValue] = useState('')
-  const [timeFrom, setTimeFrom] = useState('')
-  const [timeTo, setTimeTo] = useState('')
-  const [limit, setLimit] = useState(25)
-  const [startFrom, setStartFrom] = useState<ConsumeStartFrom>('end')
-  const [startOffset, setStartOffset] = useState('0')
-  const [partitionFilter, setPartitionFilter] = useState<string>('all')
   const [savedQueries, setSavedQueries] = useState<SavedConsumeQuery[]>(() => loadSavedQueries())
-
-  /** Raw broker window → client filters (search/key/headers/time). */
-  const filteredMessages = useMemo(
-    () =>
-      filterMessages(messages, {
-        search,
-        searchKey,
-        headerKey,
-        headerValue,
-        timeFrom,
-        timeTo,
-      }),
-    [messages, search, searchKey, headerKey, headerValue, timeFrom, timeTo],
-  )
+  const consumeFilters = useConsumeFilters(messages)
+  const {
+    search,
+    searchKey,
+    headerKey,
+    headerValue,
+    timeFrom,
+    timeTo,
+    limit,
+    startFrom,
+    startOffset,
+    partitionFilter,
+    filteredMessages,
+    filterStateRef,
+    brokerReloadRef,
+    currentFilterState,
+    cancelScheduledConsumeReload,
+    applyFilterState,
+    partitionsFor: partitionsForFilter,
+    selectedPartitions,
+    setSearchFilter,
+    setSearchKeyFilter,
+    setHeaderKeyFilter,
+    setHeaderValueFilter,
+    setTimeFromFilter,
+    setTimeToFilter,
+    setPartitionFilterUI,
+    setStartFromFilter,
+    setStartOffsetFilter,
+    setLimitFilter,
+    resetPartitionToAll,
+  } = consumeFilters
 
   const [tab, setTab] = useState<'consume' | 'produce' | 'groups' | 'tail' | 'logs' | 'settings'>(
     'consume',
@@ -175,10 +167,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }, [groups, groupQuery])
 
   useEffect(() => {
-    return () => {
-      if (filterReloadTimer.current) clearTimeout(filterReloadTimer.current)
-    }
-  }, [])
+    return () => cancelScheduledConsumeReload()
+  }, [cancelScheduledConsumeReload])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? '1' : '0')
@@ -380,31 +370,6 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   tabRef.current = tab
   const consumeGenRef = useRef(0)
   const enrichGenRef = useRef(0)
-  const filterReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const filterStateRef = useRef<ConsumeFilterState>({
-    search,
-    searchKey,
-    headerKey,
-    headerValue,
-    partitionFilter,
-    startFrom,
-    startOffset,
-    limit,
-    timeFrom,
-    timeTo,
-  })
-  filterStateRef.current = {
-    search,
-    searchKey,
-    headerKey,
-    headerValue,
-    partitionFilter,
-    startFrom,
-    startOffset,
-    limit,
-    timeFrom,
-    timeTo,
-  }
 
   function addConnection() {
     const next = defaultConnection()
@@ -840,8 +805,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTopicDetails(null)
     setTopicGroupLags(null)
     setError(null)
-    filterStateRef.current = { ...filterStateRef.current, partitionFilter: 'all' }
-    setPartitionFilter('all')
+    resetPartitionToAll()
     setBusy(true)
     try {
       if (tailing) {
@@ -876,101 +840,6 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     } finally {
       setBusy(false)
     }
-  }
-
-  function currentFilterState(): ConsumeFilterState {
-    return { ...filterStateRef.current }
-  }
-
-  function partitionsFor(filter: string): number[] | undefined {
-    if (filter === 'all') return undefined
-    const n = Number(filter)
-    return Number.isFinite(n) ? [n] : undefined
-  }
-
-  function selectedPartitions(): number[] | undefined {
-    return partitionsFor(partitionFilter)
-  }
-
-  function cancelScheduledConsumeReload() {
-    if (filterReloadTimer.current) {
-      clearTimeout(filterReloadTimer.current)
-      filterReloadTimer.current = null
-    }
-  }
-
-  function applyFilterState(f: ConsumeFilterState) {
-    cancelScheduledConsumeReload()
-    filterStateRef.current = f
-    setSearch(f.search)
-    setSearchKey(f.searchKey)
-    setHeaderKey(f.headerKey)
-    setHeaderValue(f.headerValue)
-    setPartitionFilter(f.partitionFilter)
-    setStartFrom(f.startFrom)
-    setStartOffset(f.startOffset)
-    setLimit(f.limit)
-    setTimeFrom(f.timeFrom)
-    setTimeTo(f.timeTo)
-  }
-
-  function scheduleConsumeReload(patch: Partial<ConsumeFilterState>, delayMs = 0) {
-    filterStateRef.current = { ...filterStateRef.current, ...patch }
-    cancelScheduledConsumeReload()
-    const run = () => {
-      filterReloadTimer.current = null
-      const topic = selectedTopicRef.current
-      if (!topic || tabRef.current !== 'consume') return
-      void loadMessages(topic, { ...filterStateRef.current })
-    }
-    if (delayMs <= 0) run()
-    else filterReloadTimer.current = setTimeout(run, delayMs)
-  }
-
-  /**
-   * Client-side filters — narrow the already loaded window, no Kafka round-trip.
-   * Broker reload stays on startFrom / offset / limit / partition / Refresh.
-   */
-  function setSearchFilter(v: string) {
-    setSearch(v)
-    filterStateRef.current = { ...filterStateRef.current, search: v }
-  }
-  function setSearchKeyFilter(v: string) {
-    setSearchKey(v)
-    filterStateRef.current = { ...filterStateRef.current, searchKey: v }
-  }
-  function setHeaderKeyFilter(v: string) {
-    setHeaderKey(v)
-    filterStateRef.current = { ...filterStateRef.current, headerKey: v }
-  }
-  function setHeaderValueFilter(v: string) {
-    setHeaderValue(v)
-    filterStateRef.current = { ...filterStateRef.current, headerValue: v }
-  }
-  function setTimeFromFilter(v: string) {
-    setTimeFrom(v)
-    filterStateRef.current = { ...filterStateRef.current, timeFrom: v }
-  }
-  function setTimeToFilter(v: string) {
-    setTimeTo(v)
-    filterStateRef.current = { ...filterStateRef.current, timeTo: v }
-  }
-  /** Window controls — re-fetch from broker. */
-  function setPartitionFilterUI(v: string) {
-    setPartitionFilter(v)
-    scheduleConsumeReload({ partitionFilter: v })
-  }
-  function setStartFromFilter(v: ConsumeStartFrom) {
-    setStartFrom(v)
-    scheduleConsumeReload({ startFrom: v })
-  }
-  function setStartOffsetFilter(v: string) {
-    setStartOffset(v)
-    scheduleConsumeReload({ startOffset: v }, 350)
-  }
-  function setLimitFilter(v: number) {
-    setLimit(v)
-    scheduleConsumeReload({ limit: v }, 350)
   }
 
   function saveCurrentQuery(name: string) {
@@ -1043,7 +912,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         startFrom: f.startFrom,
         startOffset: f.startFrom === 'offset' ? f.startOffset : undefined,
         limit: f.limit,
-        partitions: partitionsFor(f.partitionFilter),
+        partitions: partitionsForFilter(f.partitionFilter),
       })
       // Ignore stale responses if a newer filter/topic request already started
       if (selectedTopicRef.current === topic && consumeGenRef.current === gen) {
@@ -1058,6 +927,12 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         setLoadingMessages(false)
       }
     }
+  }
+
+  brokerReloadRef.current = (filter) => {
+    const topic = selectedTopicRef.current
+    if (!topic || tabRef.current !== 'consume') return
+    void loadMessages(topic, filter)
   }
 
   async function loadGroups() {
