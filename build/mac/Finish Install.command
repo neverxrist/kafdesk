@@ -21,7 +21,6 @@ done
 sleep 0.4
 rm -f "$DOWNLOADS"/KafDesk*.dmg 2>/dev/null || true
 rm -f "$DOWNLOADS"/KafDesk\ Finish\ Install.command 2>/dev/null || true
-rm -f "$DOWNLOADS"/KafDesk-after-install.txt 2>/dev/null || true
 
 open "$APP"
 

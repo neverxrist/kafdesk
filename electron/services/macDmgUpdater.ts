@@ -194,6 +194,7 @@ export function getPendingMacDmg(): PendingMacUpdate | null {
 
 function cleanupInstallArtifacts(dmgPath?: string | null): void {
   const downloads = app.getPath('downloads')
+  // Also wipe leftovers from older builds that dropped helpers into Downloads.
   const victims = [
     dmgPath,
     path.join(downloads, 'KafDesk Finish Install.command'),
@@ -242,66 +243,16 @@ function ensureDmgInDownloads(dmgPath: string): string {
   }
 }
 
-const FINISH_INSTALL_SCRIPT = `#!/bin/bash
-# Clear Gatekeeper quarantine; unmount & delete the DMG from Downloads.
-# Run AFTER dragging KafDesk.app into Applications — do not open the app first.
-set -euo pipefail
-APP="/Applications/KafDesk.app"
-DOWNLOADS="\${HOME}/Downloads"
-if [[ ! -d "$APP" ]]; then
-  osascript -e 'display dialog "Сначала перетащи KafDesk.app в Applications (Replace), потом снова запусти этот скрипт." buttons {"OK"} default button 1 with title "KafDesk"'
-  exit 1
-fi
-xattr -cr "$APP" 2>/dev/null || true
-for vol in /Volumes/KafDesk*; do
-  if [[ -d "$vol" ]]; then
-    hdiutil detach "$vol" -quiet 2>/dev/null || hdiutil detach "$vol" -force 2>/dev/null || true
-  fi
-done
-sleep 0.4
-rm -f "$DOWNLOADS"/KafDesk*.dmg 2>/dev/null || true
-rm -f "$DOWNLOADS/KafDesk Finish Install.command" 2>/dev/null || true
-rm -f "$DOWNLOADS/KafDesk-after-install.txt" 2>/dev/null || true
-open "$APP"
-SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-if [[ "$SELF" == "$DOWNLOADS/"* ]]; then
-  rm -f "$SELF" 2>/dev/null || true
-fi
-`
-
 const POST_INSTALL_CMDS = `xattr -cr /Applications/KafDesk.app
 open /Applications/KafDesk.app`
 
-/** Companion to the DMG: strip quarantine then open (avoids slow first Gatekeeper scan). */
-function writeFinishInstallHelper(): string {
-  const dest = path.join(app.getPath('downloads'), 'KafDesk Finish Install.command')
-  fs.writeFileSync(dest, FINISH_INSTALL_SCRIPT, { mode: 0o755 })
-  return dest
-}
-
 /**
  * Survives app.quit(): system dialog + clipboard with the Terminal one-liner.
- * (Electron dialogs disappear when we exit.)
+ * (Electron dialogs disappear when we exit — osascript stays.)
  */
 function showPostInstallHelp(): void {
   try {
     clipboard.writeText(POST_INSTALL_CMDS)
-  } catch {
-    /* ignore */
-  }
-
-  try {
-    const notePath = path.join(app.getPath('downloads'), 'KafDesk-after-install.txt')
-    fs.writeFileSync(
-      notePath,
-      `KafDesk — после установки\n\n` +
-        `1. Перетащи KafDesk.app в Applications → Replace\n` +
-        `2. Не открывай app сразу — сначала в Terminal:\n\n` +
-        `${POST_INSTALL_CMDS}\n\n` +
-        `Или «KafDesk Finish Install.command» (снимет quarantine и удалит DMG).\n` +
-        `Без xattr первый старт очень долгий (Gatekeeper).\n`,
-      'utf8',
-    )
   } catch {
     /* ignore */
   }
@@ -312,7 +263,7 @@ set msg to "1. Перетащи KafDesk.app в Applications → Replace" & retur
   "2. НЕ открывай app двойным кликом — сначала Terminal (⌘V, уже в буфере):" & return & return & ¬
   "xattr -cr /Applications/KafDesk.app" & return & ¬
   "open /Applications/KafDesk.app" & return & return & ¬
-  "Или «Finish Install» — он же удалит DMG из Downloads." & return & return & ¬
+  "Или «Finish Install» на открытом DMG." & return & return & ¬
   "Если открыть без xattr — первый старт будет очень долгим (Gatekeeper)."
 display dialog msg buttons {"OK"} default button 1 with title "KafDesk — после установки"
 `
@@ -333,11 +284,6 @@ export function openMacDmgAndQuit(dmgPath: string, version?: string): void {
   const visible = ensureDmgInDownloads(dmgPath)
   const ver = version ?? readPending()?.version
   if (ver) writePending({ path: visible, version: ver })
-  try {
-    writeFinishInstallHelper()
-  } catch {
-    /* ignore */
-  }
 
   showPostInstallHelp()
 
@@ -393,11 +339,6 @@ export async function checkAndDownloadMacDmg(
   )
 
   writePending({ path: dest, version: latest.version })
-  try {
-    writeFinishInstallHelper()
-  } catch {
-    /* ignore */
-  }
   const s: UpdateStatus = { state: 'downloaded', version: latest.version }
   emit(s)
 
@@ -419,9 +360,8 @@ export async function offerOpenDmgDialog(
     message: `KafDesk ${version} downloaded.`,
     detail:
       'Open DMG → KafDesk quits → drag into Applications (Replace).\n\n' +
-      'Then in Terminal (we’ll copy this and show a reminder):\n\n' +
+      'Then in Terminal (copied to clipboard) or Finish Install on the DMG:\n\n' +
       `${POST_INSTALL_CMDS}\n\n` +
-      'Or double-click “Finish Install” on the DMG / in Downloads.\n' +
       'Connections and settings are kept.',
     buttons: ['Open DMG & quit', 'Later'],
     defaultId: 0,
