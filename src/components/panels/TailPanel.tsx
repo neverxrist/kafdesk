@@ -142,7 +142,13 @@ export default function TailPanel({
         <EmptyState
           kind="events"
           title={tr('emptyEventsTitle')}
-          hint={selectedTopic ? tr('emptyEventsWaiting') : tr('emptyEventsHint')}
+          hint={
+            !selectedTopic
+              ? tr('emptyEventsHint')
+              : tailing
+                ? tr('emptyEventsWaiting')
+                : tr('emptyEventsStartTail')
+          }
         />
       )}
       {tailMessages.map((m, i) => (

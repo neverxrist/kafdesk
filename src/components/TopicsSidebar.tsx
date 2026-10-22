@@ -21,7 +21,7 @@ type Tr = ReturnType<typeof useLocale>['tr']
 export default function TopicsSidebar({
   tr,
   connected,
-  filteredTopics,
+  topics,
   topicQuery,
   setTopicQuery,
   selectedTopic,
@@ -31,7 +31,7 @@ export default function TopicsSidebar({
 }: {
   tr: Tr
   connected: boolean
-  filteredTopics: TopicInfo[]
+  topics: TopicInfo[]
   topicQuery: string
   setTopicQuery: (v: string) => void
   selectedTopic: string | null
@@ -46,6 +46,7 @@ export default function TopicsSidebar({
   const [dlqOpen, setDlqOpen] = useState(false)
   const [internalOpen, setInternalOpen] = useState(false)
   const [savedFilters, setSavedFilters] = useState<SavedTopicFilter[]>(() => loadTopicFilters())
+  const [activeFilterIds, setActiveFilterIds] = useState<string[]>([])
   const [onlyPinned, setOnlyPinned] = useState(() => loadOnlyPinnedTopics())
 
   function setTopicsPanelOpen(open: boolean) {
@@ -87,6 +88,18 @@ export default function TopicsSidebar({
     document.body.classList.add('topics-resizing')
   }
 
+  const chipQueries = savedFilters
+    .filter((f) => activeFilterIds.includes(f.id))
+    .map((f) => f.query.trim().toLowerCase())
+    .filter(Boolean)
+  const typedQuery = topicQuery.trim().toLowerCase()
+  const filteredTopics = topics.filter((t) => {
+    const name = t.name.toLowerCase()
+    const chipOk = chipQueries.length === 0 || chipQueries.some((q) => name.includes(q))
+    const typedOk = !typedQuery || name.includes(typedQuery)
+    return chipOk && typedOk
+  })
+
   const pinnedSet = new Set(pinnedTopics)
   const pinned = filteredTopics.filter((t) => pinnedSet.has(t.name))
   const dlq = onlyPinned
@@ -125,27 +138,39 @@ export default function TopicsSidebar({
   function saveCurrentFilter() {
     const query = topicQuery.trim()
     if (!query) return
+    const existing = savedFilters.find((f) => f.query.toLowerCase() === query.toLowerCase())
+    if (existing) {
+      setActiveFilterIds((ids) => (ids.includes(existing.id) ? ids : [...ids, existing.id]))
+      setTopicQuery('')
+      return
+    }
+    const id = crypto.randomUUID()
     const next: SavedTopicFilter[] = [
       {
-        id: crypto.randomUUID(),
+        id,
         name: query,
         query,
         createdAt: Date.now(),
       },
-      ...savedFilters.filter((f) => f.query.toLowerCase() !== query.toLowerCase()),
+      ...savedFilters,
     ].slice(0, 20)
     setSavedFilters(next)
     persistTopicFilters(next)
+    setActiveFilterIds((ids) => [...ids, id])
+    setTopicQuery('')
   }
 
-  function applyFilter(f: SavedTopicFilter) {
-    setTopicQuery(f.query)
+  function toggleFilter(f: SavedTopicFilter) {
+    setActiveFilterIds((ids) =>
+      ids.includes(f.id) ? ids.filter((id) => id !== f.id) : [...ids, f.id],
+    )
   }
 
   function deleteFilter(id: string) {
     const next = savedFilters.filter((f) => f.id !== id)
     setSavedFilters(next)
     persistTopicFilters(next)
+    setActiveFilterIds((ids) => ids.filter((x) => x !== id))
   }
 
   function renderTopic(t: TopicInfo) {
@@ -225,6 +250,11 @@ export default function TopicsSidebar({
           placeholder={tr('filterTopics')}
           disabled={!connected}
           aria-label={tr('filterTopics')}
+          autoCapitalize="none"
+          autoCorrect="off"
+          autoComplete="off"
+          spellCheck={false}
+          lang="en"
         />
         <button
           type="button"
@@ -250,9 +280,15 @@ export default function TopicsSidebar({
           {savedFilters.map((f) => (
             <span
               key={f.id}
-              className={`topic-filter-chip${topicQuery === f.query ? ' active' : ''}`}
+              className={`topic-filter-chip${activeFilterIds.includes(f.id) ? ' active' : ''}`}
             >
-              <button type="button" className="topic-filter-chip-apply" onClick={() => applyFilter(f)}>
+              <button
+                type="button"
+                className="topic-filter-chip-apply"
+                aria-pressed={activeFilterIds.includes(f.id)}
+                title={f.query}
+                onClick={() => toggleFilter(f)}
+              >
                 {f.name}
               </button>
               <button

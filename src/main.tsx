@@ -29,6 +29,8 @@ const savedTheme = localStorage.getItem('kafdesk.theme')
 document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'light' : 'dark')
 /* Glass is applied after first paint (see applyMacGlass) — keep solid at boot. */
 document.documentElement.setAttribute('data-glass', '0')
+/* WKWebView with lang=ru capitalizes sentence starts in inputs otherwise. */
+document.documentElement.setAttribute('autocapitalize', 'off')
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

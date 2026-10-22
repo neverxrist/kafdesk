@@ -211,6 +211,44 @@ export default function MessageCard({
       <span className="msg-key muted">—</span>
     )
 
+  const showActions =
+    Boolean(labels) &&
+    (Boolean(onRepublish && labels?.republish) ||
+      Boolean(onToggleDiff && labels?.diffSelect) ||
+      (!compact && needsCollapse))
+
+  const actionsBlock = showActions ? (
+    <div className="msg-actions">
+      {onRepublish && labels?.republish && (
+        <button type="button" className="msg-action" onClick={() => onRepublish(m)}>
+          {labels.republish}
+        </button>
+      )}
+      {onToggleDiff && labels?.diffSelect && (
+        <button
+          type="button"
+          className={`msg-action ${selectedForDiff ? 'active' : ''}`}
+          disabled={!selectedForDiff && diffFull}
+          onClick={() => onToggleDiff(m)}
+        >
+          {selectedForDiff ? labels.diffSelected : labels.diffSelect}
+        </button>
+      )}
+      {!compact && needsCollapse && (
+        <button
+          type="button"
+          className="msg-action msg-action-icon"
+          aria-expanded={expanded}
+          title={toggleLabel}
+          aria-label={toggleLabel}
+          onClick={toggleExpanded}
+        >
+          {expanded ? <CollapseIcon /> : <ExpandIcon />}
+        </button>
+      )}
+    </div>
+  ) : null
+
   if (compact) {
     return (
       <article
@@ -232,6 +270,7 @@ export default function MessageCard({
         </button>
         {expanded && (
           <>
+            {actionsBlock}
             {headersBlock}
             <div className="msg-body-wrap msg-compact-body">
               {labels?.copyValue && (
@@ -262,37 +301,7 @@ export default function MessageCard({
         <span className="msg-meta">{keyBlock}</span>
         {metaRight}
       </div>
-      {labels && (onRepublish || onToggleDiff || needsCollapse) && (
-        <div className="msg-actions">
-          {onRepublish && labels.republish && (
-            <button type="button" className="msg-action" onClick={() => onRepublish(m)}>
-              {labels.republish}
-            </button>
-          )}
-          {onToggleDiff && labels.diffSelect && (
-            <button
-              type="button"
-              className={`msg-action ${selectedForDiff ? 'active' : ''}`}
-              disabled={!selectedForDiff && diffFull}
-              onClick={() => onToggleDiff(m)}
-            >
-              {selectedForDiff ? labels.diffSelected : labels.diffSelect}
-            </button>
-          )}
-          {needsCollapse && (
-            <button
-              type="button"
-              className="msg-action msg-action-icon"
-              aria-expanded={expanded}
-              title={toggleLabel}
-              aria-label={toggleLabel}
-              onClick={toggleExpanded}
-            >
-              {expanded ? <CollapseIcon /> : <ExpandIcon />}
-            </button>
-          )}
-        </div>
-      )}
+      {actionsBlock}
       {headersBlock}
       <div className={`msg-body-wrap${showFullBody ? '' : ' is-collapsed'}`}>
         {labels?.copyValue && (

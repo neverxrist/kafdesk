@@ -1,9 +1,16 @@
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type {
   ConsumerGroupInfo,
   GroupOffsetEntry,
   LagSummaryResult,
 } from '../../types/kafdesk'
 import type { useLocale } from '../../hooks/useLocale'
+import {
+  clampGroupsWidth,
+  loadGroupsWidth,
+  persistGroupsWidth,
+} from '../../lib/groupsLayout'
+import { RefreshIcon } from '../ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -52,9 +59,59 @@ export default function GroupsPanel({
   setLagAutoRefresh: (v: boolean) => void
   onLoadLagSummary: () => void
 }) {
+  const [lagOnly, setLagOnly] = useState(false)
+  const [groupsWidth, setGroupsWidth] = useState(() => loadGroupsWidth())
+  const [resizing, setResizing] = useState(false)
+  const resizeStart = useRef<{ x: number; w: number } | null>(null)
   const maxGroupLag = lagSummary?.groups.reduce((m, g) => Math.max(m, g.totalLag), 0) ?? 0
   const groupsWithLag = lagSummary?.groups.filter((g) => g.totalLag > 0).length ?? 0
   const topLag = (lagSummary?.groups ?? []).filter((g) => g.totalLag > 0).slice(0, 8)
+  const lagIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const g of lagSummary?.groups ?? []) {
+      if (g.totalLag > 0) ids.add(g.groupId)
+    }
+    return ids
+  }, [lagSummary])
+  const visibleGroups = useMemo(() => {
+    if (!lagOnly) return filteredGroups
+    return filteredGroups.filter(
+      (g) => (g.totalLag != null && g.totalLag > 0) || lagIds.has(g.groupId),
+    )
+  }, [filteredGroups, lagOnly, lagIds])
+
+  useEffect(() => {
+    if (!resizing) return
+    function onMove(e: PointerEvent) {
+      const start = resizeStart.current
+      if (!start) return
+      setGroupsWidth(clampGroupsWidth(start.w + (e.clientX - start.x)))
+    }
+    function onUp() {
+      resizeStart.current = null
+      setResizing(false)
+      document.body.classList.remove('groups-resizing')
+      setGroupsWidth((w) => {
+        persistGroupsWidth(w)
+        return w
+      })
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [resizing])
+
+  function onResizePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault()
+    resizeStart.current = { x: e.clientX, w: groupsWidth }
+    setResizing(true)
+    document.body.classList.add('groups-resizing')
+  }
 
   return (
     <section className="messages groups-pane">
@@ -71,8 +128,15 @@ export default function GroupsPanel({
               />
               {tr('lagAutoRefresh')}
             </label>
-            <button type="button" disabled={!connected || busy} onClick={onLoadLagSummary}>
-              {tr('refresh')}
+            <button
+              type="button"
+              className={`refresh-icon-btn${busy ? ' busy' : ''}`}
+              disabled={!connected || busy}
+              onClick={onLoadLagSummary}
+              title={tr('refresh')}
+              aria-label={tr('refresh')}
+            >
+              <RefreshIcon />
             </button>
             {lagSummary && (
               <span className="status">
@@ -93,10 +157,17 @@ export default function GroupsPanel({
             <strong>{lagSummary ? maxGroupLag : '—'}</strong>
             <span>{tr('lagMaxGroup')}</span>
           </div>
-          <div className="lag-stat">
+          <button
+            type="button"
+            className={`lag-stat lag-stat-btn${lagOnly ? ' active' : ''}`}
+            disabled={!connected}
+            title={tr('groupsWithLagOnlyTitle')}
+            aria-pressed={lagOnly}
+            onClick={() => setLagOnly((v) => !v)}
+          >
             <strong>{lagSummary ? groupsWithLag : '—'}</strong>
             <span>{tr('lagGroupsWithLag')}</span>
-          </div>
+          </button>
           <div className="lag-stat">
             <strong>{lagSummary?.groups.length ?? filteredGroups.length}</strong>
             <span>{tr('groupsCount')}</span>
@@ -139,25 +210,66 @@ export default function GroupsPanel({
             </div>
           </>
         )}
-        {lagSummary && topLag.length === 0 && <div className="empty">Lag = 0</div>}
-        {!lagSummary && <div className="empty">{connected ? tr('refresh') : tr('selectGroup')}</div>}
+        {!lagSummary && (
+          <div className="empty">{connected ? tr('refresh') : tr('selectGroup')}</div>
+        )}
       </div>
 
       <div className="groups-layout">
-        <div className="groups-list drag-scroll">
-          <div className="field">
-            <label>{tr('consumerGroups', { n: filteredGroups.length })}</label>
+        <div
+          className={`groups-list drag-scroll${resizing ? ' is-resizing' : ''}`}
+          style={{ width: groupsWidth }}
+        >
+          <div
+            className="groups-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-valuenow={groupsWidth}
+            title={tr('resizeGroups')}
+            onPointerDown={onResizePointerDown}
+          />
+          <div className="filter-toolbar">
+            <div className="field">
+              <label>{tr('consumerGroups', { n: visibleGroups.length })}</label>
+              <input
+                value={groupQuery}
+                onChange={(e) => setGroupQuery(e.target.value)}
+                placeholder={tr('filterGroups')}
+                disabled={!connected}
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="off"
+                spellCheck={false}
+                lang="en"
+              />
+            </div>
+            <button
+              type="button"
+              className={`refresh-icon-btn${busy ? ' busy' : ''}`}
+              disabled={!connected || busy}
+              onClick={onLoadGroups}
+              title={tr('refresh')}
+              aria-label={tr('refresh')}
+            >
+              <RefreshIcon />
+            </button>
+          </div>
+          <label className="groups-lag-filter" title={tr('groupsWithLagOnlyTitle')}>
             <input
-              value={groupQuery}
-              onChange={(e) => setGroupQuery(e.target.value)}
-              placeholder={tr('filterGroups')}
+              type="checkbox"
+              checked={lagOnly}
+              onChange={(e) => setLagOnly(e.target.checked)}
               disabled={!connected}
             />
-          </div>
-          <button disabled={!connected || busy} onClick={onLoadGroups}>
-            {tr('refresh')}
-          </button>
-          {filteredGroups.map((g) => (
+            {tr('groupsWithLagOnly')}
+            {lagOnly ? ` (${visibleGroups.length})` : ''}
+          </label>
+          {lagOnly && visibleGroups.length === 0 && (
+            <div className="empty" style={{ padding: '0.75rem 0' }}>
+              Lag = 0
+            </div>
+          )}
+          {visibleGroups.map((g) => (
             <button
               key={g.groupId}
               className={`topic-item ${selectedGroup === g.groupId ? 'active' : ''}`}

@@ -28,8 +28,9 @@ export default function PasswordInput({
         onChange={(e) => onChange(e.target.value)}
         autoComplete={autoComplete}
         spellCheck={false}
-        autoCapitalize="off"
+        autoCapitalize="none"
         autoCorrect="off"
+        lang="en"
       />
       <button
         type="button"

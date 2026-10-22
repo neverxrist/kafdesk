@@ -279,7 +279,7 @@ export interface ConnectResult {
   ok: boolean
   schemaRegistry: SchemaRegistryStatus
   schemaRegistryError?: string
-  /** Advertised broker DNS problem (unresolved / collapsed). */
+  /** Advertised broker DNS problem (unresolved or collapsed). */
   brokerDnsWarning?: string
 }
 

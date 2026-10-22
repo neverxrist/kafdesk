@@ -5,6 +5,7 @@ import type { ProduceTemplate } from '../../lib/produceTemplates'
 import type { ProduceHeaderRow } from '../../lib/produceHeaders'
 import { normalizeStraightQuotes } from '../../lib/produceVars'
 import { sortSubjectsForTopic } from '../../lib/messageText'
+import TopicSchemaPanel from '../TopicSchemaPanel'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -218,6 +219,19 @@ export default function ProducePanel({
           <div className="empty" style={{ paddingTop: 0 }}>
             {tr('selectTopicLeft')}
           </div>
+        )}
+
+        {selectedTopic && (
+          <TopicSchemaPanel
+            tr={tr}
+            topic={selectedTopic}
+            subjects={subjects}
+            hasRegistry={hasRegistry}
+            onUseSubject={(s) => {
+              setProduceFormat('avro')
+              onSubjectChange(s)
+            }}
+          />
         )}
 
         <div className="field">

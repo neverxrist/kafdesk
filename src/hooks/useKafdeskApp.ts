@@ -126,9 +126,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     resetPartitionToAll,
   } = consumeFilters
 
-  const [tab, setTab] = useState<'consume' | 'produce' | 'groups' | 'tail' | 'logs' | 'settings'>(
-    'consume',
-  )
+  const [tab, setTab] = useState<
+    'consume' | 'produce' | 'groups' | 'schemas' | 'tail' | 'logs' | 'settings'
+  >('consume')
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [produceFormat, setProduceFormat] = useState<
     'avro' | 'avro-local' | 'json' | 'string'
@@ -157,7 +157,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [movePartition, setMovePartition] = useState('0')
   const [moveOffset, setMoveOffset] = useState('0')
   const [lagSummary, setLagSummary] = useState<import('../types/kafdesk').LagSummaryResult | null>(null)
-  const [lagAutoRefresh, setLagAutoRefresh] = useState(true)
+  const [lagAutoRefresh, setLagAutoRefresh] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<import('../types/kafdesk').UpdateStatus>({
     state: 'idle',
   })
@@ -253,6 +253,13 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     return () => clearInterval(id)
   }, [tab, connected, lagAutoRefresh, selectedTopic]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    // Only leave Schemas after a real disconnect of SR — not during initial 'none'.
+    if (tab === 'schemas' && connected && srStatus !== 'ok') {
+      setTab('consume')
+    }
+  }, [tab, connected, srStatus])
+
   // Mac DMG auto-update: check on enable + every 6h while on
   useEffect(() => {
     if (!updateAuto || !window.kafdesk?.checkForUpdates) return
@@ -293,6 +300,19 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   function togglePinTopic(name: string) {
     if (!config?.id) return
     setPinnedTopics(togglePinnedTopic(config.id, name))
+  }
+
+  function reorderConnections(fromId: string, toId: string) {
+    if (fromId === toId) return
+    setConnections((prev) => {
+      const from = prev.findIndex((c) => c.id === fromId)
+      const to = prev.findIndex((c) => c.id === toId)
+      if (from < 0 || to < 0 || from === to) return prev
+      const next = [...prev]
+      const [item] = next.splice(from, 1)
+      next.splice(to, 0, item)
+      return next
+    })
   }
 
   function toggleDiffMessage(m: KafkaMessageView) {
@@ -922,6 +942,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       }
       if (selectedTopicRef.current !== name) return
       // After messages — never race GroupCoordinator against consume.
+      // Keep [] (not null) on failure so the «Читают» row stays visible.
       void window.kafdesk
         .getLagSummary?.(name)
         .then((res) => {
@@ -931,12 +952,25 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
           )
         })
         .catch(() => {
-          if (selectedTopicRef.current === name) setTopicGroupLags(null)
+          if (selectedTopicRef.current === name) setTopicGroupLags([])
         })
     } catch (err) {
       const msg = stripIpcError(err instanceof Error ? err.message : String(err))
       setError(msg)
       setLoadingMessages(false)
+    }
+  }
+
+  async function refreshSubjects() {
+    if (!hasRegistry || !window.kafdesk?.listSubjects) return
+    setBusy(true)
+    setError(null)
+    try {
+      setSubjects((await window.kafdesk.listSubjects()).sort())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -951,6 +985,15 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     ) {
       void loadMessages(selectedTopicRef.current)
     }
+    if (next === 'schemas' && connected && hasRegistry && subjects.length === 0) {
+      void refreshSubjects()
+    }
+  }
+
+  function useSubjectForProduce(subjectName: string) {
+    setProduceFormat('avro')
+    void onSubjectChange(subjectName)
+    changeTab('produce')
   }
 
   function saveCurrentQuery(name: string) {
@@ -1419,9 +1462,12 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     detailsRef,
     tab,
     setTab: changeTab,
+    refreshSubjects,
+    useSubjectForProduce,
     selectedTopic,
     topicDetails,
     topicGroupLags,
+    topics,
     filteredTopics,
     topicQuery,
     setTopicQuery,
@@ -1503,6 +1549,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     updateAuto,
     setAutoUpdateEnabled,
     addConnection,
+    reorderConnections,
     selectConnection,
     editConnection,
     duplicateConnection,

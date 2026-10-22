@@ -23,6 +23,31 @@ export function guessAvroSubject(topic: string, subjects: string[]): string {
   return soft || ''
 }
 
+/** Canonical TopicNameStrategy candidates (may exist even if /subjects list is filtered). */
+export function topicSubjectCandidates(topic: string): string[] {
+  if (!topic) return []
+  return [`${topic}-value`, `${topic}-key`, topic]
+}
+
+/** Subjects likely tied to a topic (list match — soft includes topic name). */
+export function subjectsForTopic(topic: string, subjects: string[]): string[] {
+  if (!topic) return []
+  const preferred = topicSubjectCandidates(topic)
+  const exact = preferred.filter((p) => subjects.includes(p))
+  const soft = subjects.filter((s) => {
+    if (exact.includes(s)) return false
+    if (s.startsWith(`${topic}-`) || s.startsWith(`${topic}.`) || s === topic) return true
+    // Record/TopicRecord strategies often embed the topic mid-name.
+    return s.includes(topic)
+  })
+  soft.sort((a, b) => {
+    const pa = preferred.includes(a) ? 0 : a.includes('-value') ? 1 : 2
+    const pb = preferred.includes(b) ? 0 : b.includes('-value') ? 1 : 2
+    return pa - pb || a.localeCompare(b)
+  })
+  return [...exact, ...soft]
+}
+
 /** Topic-related subjects first, then alphabetical */
 export function sortSubjectsForTopic(topic: string | null, subjects: string[]): string[] {
   if (!topic) return [...subjects].sort()

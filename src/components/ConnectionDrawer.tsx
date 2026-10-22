@@ -1,4 +1,10 @@
-import { useEffect, useState, type RefObject } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from 'react'
 import type { ClusterConfig, SchemaRegistryStatus } from '../types/kafdesk'
 import type { AuthMethodUi } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
@@ -37,6 +43,7 @@ export default function ConnectionDrawer({
   onAddConnection,
   onSelectConnection,
   onEditConnection,
+  onReorderConnections,
   onDuplicateConnection,
   onRequestDeleteConnection,
   onCancelDeleteConnection,
@@ -70,6 +77,7 @@ export default function ConnectionDrawer({
   onAddConnection: () => void
   onSelectConnection: (id: string) => void
   onEditConnection: (id: string) => void
+  onReorderConnections: (fromId: string, toId: string) => void
   onDuplicateConnection: (id: string) => void
   onRequestDeleteConnection: (id: string) => void
   onCancelDeleteConnection: () => void
@@ -82,6 +90,10 @@ export default function ConnectionDrawer({
   onDisconnect: () => void
   onPing: () => void
 }) {
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+  const dragIdRef = useRef<string | null>(null)
+  const overIdRef = useRef<string | null>(null)
   const hasSr = Boolean(config.schemaRegistryUrl?.trim())
   const hasSrAuth = Boolean(
     config.schemaRegistryAuth?.username?.trim() || config.schemaRegistryAuth?.password,
@@ -112,6 +124,48 @@ export default function ConnectionDrawer({
       : config.ssl
         ? tr('tlsToggleSslHint')
         : tr('tlsToggleOff')
+
+  useEffect(() => {
+    if (!dragId) return
+    function onMove(e: PointerEvent) {
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      const item = el?.closest('[data-conn-id]') as HTMLElement | null
+      const id = item?.getAttribute('data-conn-id')
+      const next = id && id !== dragIdRef.current ? id : null
+      overIdRef.current = next
+      setOverId(next)
+    }
+    function onUp() {
+      const from = dragIdRef.current
+      const to = overIdRef.current
+      dragIdRef.current = null
+      overIdRef.current = null
+      setDragId(null)
+      setOverId(null)
+      document.body.classList.remove('conn-reordering')
+      if (from && to) onReorderConnections(from, to)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      document.body.classList.remove('conn-reordering')
+    }
+  }, [dragId, onReorderConnections])
+
+  function onReorderPointerDown(e: ReactPointerEvent<HTMLSpanElement>, id: string) {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragIdRef.current = id
+    overIdRef.current = null
+    setDragId(id)
+    setOverId(null)
+    document.body.classList.add('conn-reordering')
+  }
 
   const srMeta =
     srStatus === 'ok'
@@ -179,10 +233,13 @@ export default function ConnectionDrawer({
           {connections.map((c) => {
             const active = c.id === activeId
             const confirming = pendingDeleteId === c.id
+            const dragging = dragId === c.id
+            const dragOver = overId === c.id && dragId != null && dragId !== c.id
             return (
               <div
                 key={c.id}
-                className={`conn-item ${active ? 'active' : ''} ${confirming ? 'confirming' : ''}`.trim()}
+                data-conn-id={c.id}
+                className={`conn-item${active ? ' active' : ''}${confirming ? ' confirming' : ''}${dragging ? ' is-dragging' : ''}${dragOver ? ' is-drag-over' : ''}`.trim()}
               >
                 {confirming ? (
                   <>
@@ -200,6 +257,16 @@ export default function ConnectionDrawer({
                   </>
                 ) : (
                   <>
+                    <span
+                      className="conn-drag-handle no-drag-scroll"
+                      role="button"
+                      tabIndex={0}
+                      title={tr('reorderConnections')}
+                      aria-label={tr('reorderConnections')}
+                      onPointerDown={(e) => onReorderPointerDown(e, c.id)}
+                    >
+                      ⋮⋮
+                    </span>
                     <button
                       type="button"
                       className="conn-select"
@@ -286,6 +353,11 @@ export default function ConnectionDrawer({
               value={config.name}
               onChange={(e) => onUpdateConfig({ name: e.target.value })}
               aria-required
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              lang="en"
             />
           </div>
 
@@ -321,6 +393,11 @@ export default function ConnectionDrawer({
                 placeholder={tr('brokerHostPh')}
                 aria-required
                 title={tr('brokerHostsHint')}
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="off"
+                spellCheck={false}
+                lang="en"
               />
             </div>
             <div className={`field broker-port-field ${portOk ? '' : 'field-missing'}`.trim()}>

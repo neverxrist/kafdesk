@@ -122,8 +122,32 @@ where
     .map_err(|e| format!("kafka worker join: {e}"))?
 }
 
-/// Background worker (lag) — skip immediately if busy so consume never waits behind coordinator.
+/// Background worker — waits for the bg slot (user actions: open group / list groups).
 async fn with_session_worker_bg<T, F>(state: &AppState, op: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(KafkaSession) -> Result<T, String> + Send + 'static,
+{
+    let permit = state
+        .kafka_bg
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "Kafka background interrupted".to_string())?;
+    let worker = {
+        let guard = state.kafka.lock().await;
+        guard.clone_for_worker()?
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        op(worker)
+    })
+    .await
+    .map_err(|e| format!("kafka worker join: {e}"))?
+}
+
+/// Lag walk — never queue behind / block UI; skip if bg slot taken.
+async fn with_session_worker_bg_try<T, F>(state: &AppState, op: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(KafkaSession) -> Result<T, String> + Send + 'static,
@@ -280,8 +304,8 @@ pub async fn kafka_get_lag_summary(
     state: State<'_, Arc<AppState>>,
     topic: Option<String>,
 ) -> Result<LagSummaryResult, String> {
-    // Lag walks groups via coordinator — bg try_acquire so topic switches stay snappy.
-    match with_session_worker_bg(&state, move |session| {
+    // Lag walks groups via coordinator — try_acquire only (never modal "busy" on click).
+    match with_session_worker_bg_try(&state, move |session| {
         session.get_lag_summary(topic.as_deref())
     })
     .await

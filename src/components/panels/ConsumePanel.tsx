@@ -7,6 +7,7 @@ import MsgFontControls from '../MsgFontControls'
 import type { useLocale } from '../../hooks/useLocale'
 import type { SavedConsumeQuery } from '../../lib/savedQueries'
 import { RefreshIcon } from '../ConnActionIcons'
+import TopicSchemaPanel from '../TopicSchemaPanel'
 import { messageId } from '../../lib/messageText'
 import {
   loadBatchTimeSort,
@@ -420,6 +421,8 @@ export default function ConsumePanel({
   messages,
   windowMessageCount = 0,
   selectedTopic,
+  subjects,
+  hasRegistry,
   busy,
   startFrom = 'end',
   diffMessages,
@@ -436,6 +439,8 @@ export default function ConsumePanel({
   /** Raw broker window size (before search/key/headers/time) */
   windowMessageCount?: number
   selectedTopic: string | null
+  subjects: string[]
+  hasRegistry: boolean
   busy?: boolean
   startFrom?: ConsumeStartFrom
   diffMessages: KafkaMessageView[]
@@ -519,8 +524,8 @@ export default function ConsumePanel({
         viewMode={viewMode}
         selectedForDiff={diffIds.has(messageId(m))}
         diffFull={diffFull}
-        onToggleDiff={viewMode === 'full' ? onToggleDiff : undefined}
-        onRepublish={viewMode === 'full' ? onRepublish : undefined}
+        onToggleDiff={onToggleDiff}
+        onRepublish={onRepublish}
         labels={{
           republish: tr('republish'),
           diffSelect: tr('diffSelect'),
@@ -581,27 +586,33 @@ export default function ConsumePanel({
                   })}
                 </div>
               </div>
-              {topicGroupLags != null && (
-                <div className="topic-lag-row" title={tr('topicConsumersLabel')}>
-                  <span className="topic-lag-label">{tr('topicConsumersLabel')}</span>
-                  {topicGroupLags.length === 0 ? (
-                    <span className="topic-lag-empty">{tr('topicLagNone')}</span>
-                  ) : (
-                    topicGroupLags.map((g) => (
-                      <button
-                        key={g.groupId}
-                        type="button"
-                        className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
-                        title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
-                        onClick={() => onOpenConsumerGroup?.(g.groupId)}
-                      >
-                        <em>{g.groupId}</em>
-                        <strong>{g.totalLag}</strong>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
+              <div className="topic-lag-row" title={tr('topicConsumersLabel')}>
+                <span className="topic-lag-label">{tr('topicConsumersLabel')}</span>
+                {topicGroupLags == null ? (
+                  <span className="topic-lag-empty">{tr('topicLagLoading')}</span>
+                ) : topicGroupLags.length === 0 ? (
+                  <span className="topic-lag-empty">{tr('topicLagNone')}</span>
+                ) : (
+                  topicGroupLags.map((g) => (
+                    <button
+                      key={g.groupId}
+                      type="button"
+                      className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
+                      title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
+                      onClick={() => onOpenConsumerGroup?.(g.groupId)}
+                    >
+                      <em>{g.groupId}</em>
+                      <strong>{g.totalLag}</strong>
+                    </button>
+                  ))
+                )}
+              </div>
+              <TopicSchemaPanel
+                tr={tr}
+                topic={selectedTopic}
+                subjects={subjects}
+                hasRegistry={hasRegistry}
+              />
             </div>
             <div className="messages-panel-controls">
               <label className="message-group-opt">
@@ -649,13 +660,14 @@ export default function ConsumePanel({
           left={diffMessages[0]}
           right={diffMessages[1]}
           onClear={onClearDiff}
+          onRemove={onToggleDiff}
         />
       )}
       {diffMessages.length === 1 && (
         <div className="msg-diff-hint panel">
-          {tr('diffPickSecond')}
-          <button type="button" onClick={onClearDiff}>
-            {tr('diffClear')}
+          <span>{tr('diffPickSecond')}</span>
+          <button type="button" onClick={() => onToggleDiff(diffMessages[0])}>
+            {tr('diffRemove')}
           </button>
         </div>
       )}

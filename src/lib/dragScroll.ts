@@ -2,7 +2,7 @@
 
 /** Don't start a drag from these — keep caret / text selection / native controls. */
 const SKIP =
-  'input, textarea, select, a, [contenteditable="true"], .no-drag-scroll, .allow-select, .msg-body, pre, code, .schema-preview, .modal-message'
+  'input, textarea, select, a, [contenteditable="true"], .no-drag-scroll, .allow-select, .msg-body, pre, code, .schema-preview, .modal-message, .conn-drag-handle, [draggable="true"]'
 
 function canScroll(el: HTMLElement): { x: boolean; y: boolean } {
   const s = getComputedStyle(el)
@@ -98,7 +98,8 @@ export function installDragScroll(): () => void {
     if (e.button !== 0) return
     if (!(e.target instanceof Element)) return
     if (e.target.closest(SKIP)) return
-    if (e.target.closest('.topics-resize')) return
+    if (e.target.closest('.topics-resize, .groups-resize, .conn-drag-handle')) return
+    if (document.body.classList.contains('conn-reordering')) return
     const scroll = nearestDragScrollPane(e.target)
     if (!scroll) return
     pane = scroll

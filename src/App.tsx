@@ -8,6 +8,7 @@ import ConsumePanel, { ConsumeToolbar } from './components/panels/ConsumePanel'
 import TailPanel, { TailToolbar } from './components/panels/TailPanel'
 import ProducePanel from './components/panels/ProducePanel'
 import GroupsPanel from './components/panels/GroupsPanel'
+import SchemasPanel from './components/panels/SchemasPanel'
 import LogsPanel from './components/panels/LogsPanel'
 import SettingsPanel from './components/panels/SettingsPanel'
 import { useAppLogs } from './hooks/useAppLogs'
@@ -100,6 +101,7 @@ export default function App() {
         onAddConnection={a.addConnection}
         onSelectConnection={a.selectConnection}
         onEditConnection={a.editConnection}
+        onReorderConnections={a.reorderConnections}
         onDuplicateConnection={a.duplicateConnection}
         onRequestDeleteConnection={a.requestDeleteConnection}
         onCancelDeleteConnection={a.cancelDeleteConnection}
@@ -149,12 +151,14 @@ export default function App() {
           onConnect={a.connect}
           onReconnect={a.reconnect}
           tab={a.tab}
-          selectedTopic={a.selectedTopic}
           onTabChange={(next) => {
             a.setTab(next)
             if (next === 'groups' && a.connected) {
               if (a.groups.length === 0) void a.loadGroups()
               else void a.loadLagSummary()
+            }
+            if (next === 'schemas' && a.connected && a.hasRegistry && a.subjects.length === 0) {
+              void a.refreshSubjects()
             }
           }}
         />
@@ -223,19 +227,21 @@ export default function App() {
           />
         ) : (
           <div
-            className={`content ${a.tab === 'produce' ? 'content-produce' : ''} ${a.tab === 'groups' ? 'content-groups' : ''}`}
+            className={`content ${a.tab === 'produce' ? 'content-produce' : ''} ${a.tab === 'groups' ? 'content-groups' : ''} ${a.tab === 'schemas' ? 'content-schemas' : ''}`}
           >
-            <TopicsSidebar
-              tr={tr}
-              connected={a.connected}
-              filteredTopics={a.filteredTopics}
-              topicQuery={a.topicQuery}
-              setTopicQuery={a.setTopicQuery}
-              selectedTopic={a.selectedTopic}
-              onSelectTopic={a.selectTopic}
-              pinnedTopics={a.pinnedTopics}
-              onTogglePin={a.togglePinTopic}
-            />
+            {a.tab !== 'schemas' && (
+              <TopicsSidebar
+                tr={tr}
+                connected={a.connected}
+                topics={a.topics}
+                topicQuery={a.topicQuery}
+                setTopicQuery={a.setTopicQuery}
+                selectedTopic={a.selectedTopic}
+                onSelectTopic={a.selectTopic}
+                pinnedTopics={a.pinnedTopics}
+                onTogglePin={a.togglePinTopic}
+              />
+            )}
 
             {a.tab === 'consume' && (
               <ConsumePanel
@@ -245,6 +251,8 @@ export default function App() {
                 messages={a.filteredMessages}
                 windowMessageCount={a.windowMessageCount}
                 selectedTopic={a.selectedTopic}
+                subjects={a.subjects}
+                hasRegistry={a.hasRegistry}
                 busy={a.loadingMessages}
                 startFrom={a.startFrom}
                 diffMessages={a.diffMessages}
@@ -323,6 +331,17 @@ export default function App() {
                 lagAutoRefresh={a.lagAutoRefresh}
                 setLagAutoRefresh={a.setLagAutoRefresh}
                 onLoadLagSummary={a.loadLagSummary}
+              />
+            )}
+            {a.tab === 'schemas' && (
+              <SchemasPanel
+                tr={tr}
+                connected={a.connected}
+                hasRegistry={a.hasRegistry}
+                subjects={a.subjects}
+                busy={a.busy}
+                onRefreshSubjects={a.refreshSubjects}
+                onUseForProduce={a.useSubjectForProduce}
               />
             )}
           </div>

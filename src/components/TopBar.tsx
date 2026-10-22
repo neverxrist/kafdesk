@@ -30,7 +30,14 @@ function SidebarPanelIcon() {
   )
 }
 
-export type AppTab = 'consume' | 'produce' | 'groups' | 'tail' | 'logs' | 'settings'
+export type AppTab =
+  | 'consume'
+  | 'produce'
+  | 'groups'
+  | 'schemas'
+  | 'tail'
+  | 'logs'
+  | 'settings'
 
 export default function TopBar({
   tr,
@@ -54,7 +61,6 @@ export default function TopBar({
   onReconnect,
   tab,
   onTabChange,
-  selectedTopic,
 }: {
   tr: Tr
   theme: Theme
@@ -77,7 +83,6 @@ export default function TopBar({
   onReconnect: () => void
   tab: AppTab
   onTabChange: (tab: AppTab) => void
-  selectedTopic: string | null
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -208,22 +213,27 @@ export default function TopBar({
             ['produce', tr('produce')],
             ['tail', tr('tail')],
             ['groups', tr('groups')],
+            ['schemas', tr('schemas')],
           ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={`topbar-tab${tab === id ? ' active' : ''}`}
-            onClick={() => onTabChange(id)}
-          >
-            {label}
-          </button>
-        ))}
-        {selectedTopic && tab !== 'logs' && tab !== 'settings' && (
-          <span className="topbar-tab-topic" title={selectedTopic}>
-            {selectedTopic}
-          </span>
-        )}
+        ).map(([id, label]) => {
+          const schemasOff = id === 'schemas' && srStatus !== 'ok'
+          return (
+            <button
+              key={id}
+              type="button"
+              className={`topbar-tab${tab === id ? ' active' : ''}`}
+              disabled={schemasOff}
+              title={schemasOff ? tr('topicSchemaNoSr') : undefined}
+              aria-disabled={schemasOff || undefined}
+              onClick={() => {
+                if (schemasOff) return
+                onTabChange(id)
+              }}
+            >
+              {label}
+            </button>
+          )
+        })}
       </nav>
 
       <div className="topbar-controls">

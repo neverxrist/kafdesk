@@ -103,9 +103,31 @@ jobs:
           if [ -n "${{ matrix.rust_target }}" ]; then
             TARGET_ARGS=(--target "${{ matrix.rust_target }}")
           fi
-          node scripts/with-cmake.mjs tauri build \
-            "${TARGET_ARGS[@]}" \
-            --bundles "${{ matrix.bundles }}"
+
+          # macOS hdiutil "Resource busy" is a known Actions flake (XProtect / I/O).
+          # Retries reuse the already-compiled binary and only re-run bundling.
+          # See https://github.com/actions/runner-images/issues/7522
+          MAX_ATTEMPTS=1
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            MAX_ATTEMPTS=3
+            sync || true
+          fi
+          attempt=1
+          while true; do
+            if node scripts/with-cmake.mjs tauri build \
+              "${TARGET_ARGS[@]}" \
+              --bundles "${{ matrix.bundles }}"; then
+              break
+            fi
+            if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+              echo "Tauri build failed after ${attempt} attempt(s)"
+              exit 1
+            fi
+            echo "Tauri build failed (attempt ${attempt}/${MAX_ATTEMPTS}); retrying in 20s…"
+            attempt=$((attempt + 1))
+            sync || true
+            sleep 20
+          done
         env:
           CI: true
 

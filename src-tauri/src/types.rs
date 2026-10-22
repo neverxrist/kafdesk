@@ -76,7 +76,7 @@ pub struct ConnectResult {
     pub schema_registry: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema_registry_error: Option<String>,
-    /// Advertised broker DNS that does not resolve on this machine (consume will hang without /etc/hosts).
+    /// Advertised broker DNS problem on this machine (consume may hang until DNS is fixed).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broker_dns_warning: Option<String>,
 }
