@@ -125,7 +125,9 @@ export default function ConnectionDrawer({
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} aria-hidden={!sidebarOpen}>
         <div className="brand-row">
           <div className="brand">
-            <h1>KafDesk</h1>
+            <h1>
+              Kaf<span className="brand-desk">Desk</span>
+            </h1>
             <span>{tr('connections')}</span>
           </div>
           <button

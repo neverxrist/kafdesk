@@ -40,6 +40,34 @@ function CopyIcon() {
   )
 }
 
+function ExpandIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M4 6.2 8 10.2 12 6.2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function CollapseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M4 9.8 8 5.8 12 9.8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 function CheckIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
@@ -254,11 +282,13 @@ export default function MessageCard({
           {needsCollapse && (
             <button
               type="button"
-              className="msg-action"
+              className="msg-action msg-action-icon"
               aria-expanded={expanded}
+              title={toggleLabel}
+              aria-label={toggleLabel}
               onClick={toggleExpanded}
             >
-              {expanded ? labels.collapse : labels.expand}
+              {expanded ? <CollapseIcon /> : <ExpandIcon />}
             </button>
           )}
         </div>

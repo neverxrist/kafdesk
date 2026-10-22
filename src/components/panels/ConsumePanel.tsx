@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../types/kafdesk'
+import EmptyState from '../EmptyState'
 import MessageCard from '../MessageCard'
 import MessageDiffPanel from '../MessageDiffPanel'
 import type { useLocale } from '../../hooks/useLocale'
@@ -658,15 +659,19 @@ export default function ConsumePanel({
       )}
 
       {messages.length === 0 && (
-        <div className="empty">
-          {!selectedTopic
-            ? tr('selectTopic')
-            : busy
-              ? tr('loadingMessages')
-              : windowMessageCount > 0
-                ? tr('noMessagesFilter')
-                : tr('noMessagesWindow')}
-        </div>
+        <EmptyState
+          kind="events"
+          title={tr('emptyEventsTitle')}
+          hint={
+            !selectedTopic
+              ? tr('emptyEventsHint')
+              : busy
+                ? tr('loadingMessages')
+                : windowMessageCount > 0
+                  ? tr('noMessagesFilter')
+                  : tr('noMessagesWindow')
+          }
+        />
       )}
 
       {groupByPartitions

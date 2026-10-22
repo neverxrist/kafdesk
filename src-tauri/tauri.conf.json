@@ -1,7 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "KafDesk",
-  "version": "0.3.3",
+  "mainBinaryName": "KafDesk",
+  "version": "0.3.4",
   "identifier": "app.kafdesk.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -10,6 +11,7 @@
     "beforeBuildCommand": "npm run build:web"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "KafDesk",
@@ -18,7 +20,8 @@
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "transparent": true
       }
     ],
     "security": {
@@ -36,7 +39,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "bundleName": "KafDesk"
     }
   }
 }

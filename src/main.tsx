@@ -25,6 +25,8 @@ installDragScroll()
 
 const savedTheme = localStorage.getItem('kafdesk.theme')
 document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'light' : 'dark')
+/* Glass is applied after first paint (see applyMacGlass) — keep solid at boot. */
+document.documentElement.setAttribute('data-glass', '0')
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

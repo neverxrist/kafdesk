@@ -13,12 +13,14 @@ import SettingsPanel from './components/panels/SettingsPanel'
 import { useAppLogs } from './hooks/useAppLogs'
 import { useKafdeskApp } from './hooks/useKafdeskApp'
 import { useLocale } from './hooks/useLocale'
+import { useGlass } from './hooks/useGlass'
 import { useTheme } from './hooks/useTheme'
 import { detectUpdateOs } from './lib/updateOs'
 import type { MsgKey } from './i18n'
 
 export default function App() {
   const { theme, toggleTheme } = useTheme()
+  useGlass()
   const { tr, toggleLocale } = useLocale()
   const { logs, setLogs, pushLog } = useAppLogs()
   const a = useKafdeskApp(pushLog)

@@ -17,6 +17,7 @@
   --font: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, monospace;
   --sidebar: rgba(9, 11, 16, 0.97);
+  --panel: #12151c;
   --input-bg: #0d1016;
   --primary-text: #061018;
   --focus-ring: color-mix(in srgb, var(--accent) 32%, transparent);
@@ -40,13 +41,14 @@
   --ok: #0f8f55;
   --warn: #b07d00;
   --sidebar: rgba(255, 255, 255, 0.97);
+  --panel: #ffffff;
   --input-bg: #ffffff;
   --primary-text: #ffffff;
   --focus-ring: color-mix(in srgb, var(--accent) 24%, transparent);
-  --jh-key: #1a6fd4;
-  --jh-str: #0f8f55;
-  --jh-num: #b07d00;
-  --jh-bool: #3d4a5c;
+  --jh-key: #0a4db8;
+  --jh-str: #057a42;
+  --jh-num: #9a5200;
+  --jh-bool: #1a2740;
 }
 
 * {
@@ -127,6 +129,57 @@ body,
   /* geometricPrecision + subpixel re-rasterize glyphs on scroll → janky packaged UI */
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  /* Transparent macOS windows rubber-band the whole UI on swipe/wheel */
+  overscroll-behavior: none;
+  overflow: hidden;
+}
+
+/*
+ * Native macOS glass (Liquid Glass / vibrancy under the webview).
+ * Keep fills light so the system material shows; avoid CSS backdrop-filter
+ * (it double-blurs with NSVisualEffectView and glints while dragging).
+ */
+html[data-glass='1'],
+html[data-glass='1'] body,
+html[data-glass='1'] #root,
+html[data-glass='1'] .app {
+  background: transparent;
+}
+
+html[data-glass='1'][data-theme='dark'] {
+  --bg: rgba(9, 11, 16, 0.42);
+  --bg-elevated: rgba(18, 21, 28, 0.5);
+  --bg-soft: rgba(26, 31, 42, 0.45);
+  --sidebar: rgba(9, 11, 16, 0.92);
+  --input-bg: rgba(13, 16, 22, 0.55);
+  --panel: rgba(18, 21, 28, 0.48);
+  --border: rgba(47, 54, 68, 0.55);
+}
+
+html[data-glass='1'][data-theme='light'] {
+  --bg: rgba(238, 241, 246, 0.45);
+  --bg-elevated: rgba(255, 255, 255, 0.55);
+  --bg-soft: rgba(226, 231, 240, 0.5);
+  --sidebar: rgba(255, 255, 255, 0.94);
+  --input-bg: rgba(255, 255, 255, 0.6);
+  --panel: rgba(255, 255, 255, 0.52);
+  --border: rgba(197, 206, 220, 0.55);
+}
+
+/* Panels use the translucent tokens — don't paint opaque slabs over glass */
+html[data-glass='1'] .topics,
+html[data-glass='1'] .main,
+html[data-glass='1'] .topbar,
+html[data-glass='1'] .panel {
+  background-color: var(--bg-elevated);
+}
+
+/* Connections drawer: denser so content behind doesn't bleed through */
+html[data-glass='1'] .sidebar {
+  background: var(--sidebar);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 8px 0 28px rgba(0, 0, 0, 0.45);
 }
 
 button,
@@ -734,7 +787,11 @@ textarea:focus {
   color: var(--text);
 }
 
-.brand span {
+.brand h1 .brand-desk {
+  color: var(--accent);
+}
+
+.brand > span {
   color: var(--muted);
   font-size: 0.85rem;
 }
@@ -1952,6 +2009,12 @@ input[type='checkbox'] {
   padding: 0.65rem 0.75rem;
 }
 
+.topics,
+.messages {
+  display: flex;
+  flex-direction: column;
+}
+
 .topics {
   position: relative;
   width: 280px;
@@ -1963,6 +2026,11 @@ input[type='checkbox'] {
   flex-shrink: 0;
   overflow: auto;
   border-right: 1px solid var(--border);
+}
+
+.messages {
+  flex: 1;
+  min-width: 0;
 }
 
 .topics-resize {
@@ -2542,6 +2610,15 @@ body.topics-resizing * {
   background: var(--bg-elevated);
 }
 
+.msg-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+}
+
 .msg-action.active {
   border-color: var(--accent);
   color: var(--accent);
@@ -2619,7 +2696,8 @@ body.topics-resizing * {
   border-color: color-mix(in srgb, #e6a23c 40%, var(--border));
 }
 
-.msg-diff-col pre {
+.msg-diff-col pre,
+.msg-diff-json {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2628,6 +2706,27 @@ body.topics-resizing * {
   line-height: 1.4;
   max-height: 280px;
   overflow: auto;
+}
+
+.msg-diff-json .jh-key {
+  color: var(--jh-key);
+}
+
+.msg-diff-json .jh-str {
+  color: var(--jh-str);
+}
+
+.msg-diff-json .jh-num {
+  color: var(--jh-num);
+}
+
+.msg-diff-json .jh-bool {
+  color: var(--jh-bool);
+}
+
+.msg-diff-json .jh-null {
+  color: var(--muted);
+  font-style: italic;
 }
 
 
@@ -2953,7 +3052,19 @@ body.topics-resizing * {
 }
 
 .msg-body {
+  margin: 0;
   padding-right: 1.9rem;
+}
+
+/* Frame only when expanded — not in collapsed preview */
+.msg-body-wrap:not(.is-collapsed) > .msg-body,
+.msg-compact-body .msg-body {
+  padding: 0.65rem 2.1rem 0.65rem 0.75rem;
+  border-radius: 10px;
+  /* Neutral border — avoid clashing with --jh-key blue */
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, var(--border));
+  background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
+  overflow: auto;
 }
 
 .msg-body .jh-key {
@@ -3249,6 +3360,56 @@ button.topic-lag-chip:hover {
 .empty {
   color: var(--muted);
   padding: 1.5rem 0.25rem;
+}
+
+.empty-state {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: stretch;
+  width: 100%;
+  min-height: 0;
+  padding: 32px 18px;
+  text-align: center;
+  color: var(--muted);
+  /* Lock size — don't inherit panel font-size quirks */
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 2px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, var(--border));
+  background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
+  color: color-mix(in srgb, var(--muted) 85%, var(--accent));
+  opacity: 0.9;
+}
+
+.empty-state-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.empty-state-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+}
+
+.empty-state-hint {
+  max-width: 220px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
 }
 
 textarea {

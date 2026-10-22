@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { KafkaMessageView, TopicInfo } from '../../types/kafdesk'
+import EmptyState from '../EmptyState'
 import MessageCard from '../MessageCard'
 import type { useLocale } from '../../hooks/useLocale'
 import {
@@ -134,7 +135,11 @@ export default function TailPanel({
         </div>
       </div>
       {tailMessages.length === 0 && (
-        <div className="empty">{selectedTopic ? tr('waitingMessages') : tr('selectTopic')}</div>
+        <EmptyState
+          kind="events"
+          title={tr('emptyEventsTitle')}
+          hint={selectedTopic ? tr('emptyEventsWaiting') : tr('emptyEventsHint')}
+        />
       )}
       {tailMessages.map((m, i) => (
         <MessageCard

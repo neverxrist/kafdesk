@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="KafDesk">
+  <defs>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="1024" height="1024" rx="310" ry="310"/>
+    </clipPath>
+    <radialGradient id="glow" cx="42%" cy="38%" r="55%">
+      <stop offset="0%" stop-color="#1a2438" stop-opacity="1"/>
+      <stop offset="55%" stop-color="#12161d" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#0b0e14" stop-opacity="1"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="url(#glow)"/>
+
+    <!-- Larger Kafka topology mark (behind character) -->
+    <g transform="translate(150 200) scale(1.35)" fill="none" stroke="#58A6FF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="70" cy="40" r="34"/>
+      <circle cx="70" cy="150" r="34"/>
+      <circle cx="70" cy="260" r="34"/>
+      <circle cx="180" cy="150" r="34"/>
+      <circle cx="180" cy="260" r="34"/>
+      <path d="M70 74v42M70 184v42M104 150h42M104 260h42"/>
+      <path d="M70 184 L180 150"/>
+    </g>
+
+    <!-- Desk surface -->
+    <rect x="120" y="720" width="784" height="36" rx="8" fill="#1c2433"/>
+    <rect x="120" y="748" width="784" height="90" fill="#151b27"/>
+
+    <!-- Laptop body -->
+    <g filter="url(#soft)">
+      <!-- base / keyboard deck -->
+      <path d="M250 680 L774 680 L820 720 L204 720 Z" fill="#2a3344"/>
+      <!-- lid back -->
+      <path d="M300 470 L724 470 L760 680 L264 680 Z" fill="#243044"/>
+      <!-- lid side edge -->
+      <path d="M724 470 L780 500 L760 680 L724 470 Z" fill="#3a4d6a"/>
+      <!-- screen bezel hint -->
+      <path d="M330 500 L700 500 L730 650 L300 650 Z" fill="#182033"/>
+      <!-- hinge -->
+      <rect x="280" y="672" width="464" height="12" rx="4" fill="#1a2230"/>
+    </g>
+
+    <!-- Flat milled eggplant on laptop lid (recessed etch, no 3D gloss) -->
+    <g transform="translate(512 575) rotate(-16)" opacity="0.92">
+      <ellipse cx="0" cy="12" rx="17" ry="30" fill="#5A2F78"/>
+      <ellipse cx="0" cy="12" rx="17" ry="30" fill="none" stroke="#3A1E52" stroke-width="2.5"/>
+      <path d="M-12 -16 C-6 -28 6 -28 12 -16 C6 -20 2 -18 0 -16 C-2 -18 -6 -20 -12 -16 Z" fill="#4A8A32"/>
+      <path d="M-12 -16 C-6 -28 6 -28 12 -16" fill="none" stroke="#2F5C20" stroke-width="1.8"/>
+      <path d="M-3 -26 C-1 -33 1 -33 3 -26" stroke="#4A8A32" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+    </g>
+
+    <!-- Character -->
+    <g filter="url(#soft)">
+      <!-- body / shoulder -->
+      <ellipse cx="430" cy="620" rx="92" ry="70" fill="#F3F1E8"/>
+      <!-- neck -->
+      <ellipse cx="455" cy="545" rx="36" ry="28" fill="#F3F1E8"/>
+      <!-- head -->
+      <ellipse cx="500" cy="430" rx="118" ry="112" fill="#F7F5EC"/>
+      <!-- antennae -->
+      <g fill="none" stroke="#F3F1E8" stroke-width="18" stroke-linecap="round">
+        <path d="M440 330 C430 280 400 250 385 235"/>
+        <path d="M545 325 C560 275 590 248 610 238"/>
+      </g>
+      <circle cx="382" cy="228" r="16" fill="#F3F1E8"/>
+      <circle cx="614" cy="230" r="16" fill="#F3F1E8"/>
+      <!-- sunglasses -->
+      <path d="M400 415 C420 380 470 370 500 375 C530 370 580 380 600 415 C590 450 540 460 500 455 C460 460 410 450 400 415 Z" fill="#11151c"/>
+      <path d="M400 415 C430 400 470 398 500 400" fill="none" stroke="#1a1f28" stroke-width="6"/>
+      <!-- lens reflections -->
+      <path d="M430 400 L455 412" stroke="#F7F5EC" stroke-width="7" stroke-linecap="round"/>
+      <path d="M530 398 L555 410" stroke="#F7F5EC" stroke-width="7" stroke-linecap="round"/>
+      <!-- arm on laptop -->
+      <ellipse cx="620" cy="640" rx="70" ry="38" fill="#F3F1E8" transform="rotate(-12 620 640)"/>
+    </g>
+  </g>
+</svg>

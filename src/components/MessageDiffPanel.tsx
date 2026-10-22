@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import type { KafkaMessageView } from '../types/kafdesk'
 import { formatBadgeLabel } from '../lib/format'
+import { highlightMessageBody } from '../lib/jsonHighlight'
 import { messageBodyText } from '../lib/messageText'
 import type { useLocale } from '../hooks/useLocale'
 
@@ -33,6 +35,8 @@ export default function MessageDiffPanel({
   onClear: () => void
 }) {
   const schemaMismatch = schemasDiffer(left, right)
+  const leftBody = useMemo(() => highlightMessageBody(messageBodyText(left)), [left])
+  const rightBody = useMemo(() => highlightMessageBody(messageBodyText(right)), [right])
 
   return (
     <div className={`msg-diff panel${schemaMismatch ? ' msg-diff-schema-warn' : ''}`}>
@@ -56,14 +60,14 @@ export default function MessageDiffPanel({
             <span>{meta(left)}</span>
             <span className={`badge ${left.format}`}>{schemaLabel(left)}</span>
           </div>
-          <pre>{messageBodyText(left)}</pre>
+          <pre className="msg-diff-json">{leftBody}</pre>
         </div>
         <div className="msg-diff-col">
           <div className="msg-diff-meta">
             <span>{meta(right)}</span>
             <span className={`badge ${right.format}`}>{schemaLabel(right)}</span>
           </div>
-          <pre>{messageBodyText(right)}</pre>
+          <pre className="msg-diff-json">{rightBody}</pre>
         </div>
       </div>
     </div>

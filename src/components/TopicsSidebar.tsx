@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import EmptyState from './EmptyState'
 import type { TopicInfo } from '../types/kafdesk'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
@@ -267,11 +268,22 @@ export default function TopicsSidebar({
           ))}
         </div>
       )}
-      {!connected && <div className="empty">{tr('connectToSeeTopics')}</div>}
+      {!connected && (
+        <EmptyState kind="topics" title={tr('emptyTopicsTitle')} hint={tr('emptyTopicsHint')} />
+      )}
 
       {connected && onlyPinned && pinned.length === 0 && pinnedTopics.length > 0 && (
-        <div className="empty">{tr('onlyPinnedEmpty')}</div>
+        <EmptyState kind="topics" title={tr('emptyTopicsTitle')} hint={tr('onlyPinnedEmpty')} />
       )}
+
+      {connected &&
+        !onlyPinned &&
+        pinned.length === 0 &&
+        rest.length === 0 &&
+        dlq.length === 0 &&
+        internal.length === 0 && (
+          <EmptyState kind="topics" title={tr('emptyTopicsTitle')} hint={tr('emptyTopicsNone')} />
+        )}
 
       {(pinned.length > 0 || (onlyPinned && pinnedTopics.length > 0)) && (
         <div className="topic-section">
