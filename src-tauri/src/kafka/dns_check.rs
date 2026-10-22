@@ -2,7 +2,7 @@
 
 use rdkafka::consumer::{Consumer, ConsumerContext};
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
 
 #[derive(Debug, Default)]
@@ -73,102 +73,37 @@ pub fn inspect_advertised_brokers<C: ConsumerContext>(
     Ok(report)
 }
 
-pub fn bootstrap_ip_hint(brokers: &str) -> Option<String> {
-    for part in brokers.split(',') {
-        let host = part
-            .trim()
-            .rsplit_once(':')
-            .and_then(|(h, p)| {
-                if p.chars().all(|c| c.is_ascii_digit()) {
-                    Some(h)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(part.trim())
-            .trim_start_matches('[')
-            .trim_end_matches(']');
-        if host.parse::<IpAddr>().is_ok() {
-            return Some(host.to_string());
-        }
+fn format_unresolved(unresolved: &[String]) -> String {
+    let n = unresolved.len();
+    let preview: Vec<_> = unresolved.iter().take(3).map(|s| s.as_str()).collect();
+    let list = preview.join(", ");
+    if n > 3 {
+        format!(
+            "Broker DNS: {n} hostnames do not resolve (e.g. {list}, …). Check VPN / DNS / advertised.listeners."
+        )
+    } else {
+        format!(
+            "Broker DNS: hostnames do not resolve ({list}). Check VPN / DNS / advertised.listeners."
+        )
     }
-    None
 }
 
-fn broker_sort_key(host: &str) -> (u32, String) {
-    let label = host.split('.').next().unwrap_or(host);
-    let num = label
-        .rsplit(|c: char| !c.is_ascii_digit())
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(999);
-    (num, host.to_string())
-}
-
-pub fn suggested_hosts_lines(hosts: &[String], brokers: &str) -> Vec<String> {
-    let tip = bootstrap_ip_hint(brokers).unwrap_or_else(|| "<broker-ip>".into());
-    let Ok(IpAddr::V4(base)) = tip.parse::<IpAddr>() else {
-        return hosts.iter().map(|h| format!("{tip}  {h}")).collect();
-    };
-    let octets = base.octets();
-    let mut ordered = hosts.to_vec();
-    ordered.sort_by_key(|h| broker_sort_key(h));
-    let first_num = ordered
-        .first()
-        .map(|h| broker_sort_key(h).0)
-        .filter(|&n| n < 900)
-        .unwrap_or(1);
-
-    ordered
-        .iter()
-        .map(|h| {
-            let n = broker_sort_key(h).0;
-            let offset = if n < 900 {
-                n.saturating_sub(first_num.min(n))
-            } else {
-                0
-            };
-            let last = octets[3].saturating_add(offset as u8);
-            let ip = Ipv4Addr::new(octets[0], octets[1], octets[2], last);
-            format!("{ip}  {h}")
-        })
-        .collect()
-}
-
-pub fn format_hosts_guidance(unresolved: &[String], brokers: &str) -> String {
-    let hosts = suggested_hosts_lines(unresolved, brokers).join("\n");
+fn format_collapsed(same_ip: IpAddr, host_count: usize) -> String {
     format!(
-        "Broker hostnames do not resolve: {}.\n\
-         Map them in /etc/hosts to reachable broker IPs, then reconnect.\n{}",
-        unresolved.join(", "),
-        hosts
-    )
-}
-
-pub fn format_collapsed_dns_guidance(
-    hosts: &[String],
-    same_ip: IpAddr,
-    brokers: &str,
-) -> String {
-    let lines = suggested_hosts_lines(hosts, brokers).join("\n");
-    format!(
-        "All advertised broker hostnames resolve to {same_ip}. \
-         Consume needs distinct broker IPs (otherwise NotLeaderForPartition).\n\
-         Add /etc/hosts entries (one IP per broker hostname), flush DNS, reconnect:\n{lines}"
+        "Broker DNS: {host_count} hostnames all resolve to {same_ip} (need distinct IPs). Check VPN / DNS / fake-IP / advertised.listeners."
     )
 }
 
 pub fn dns_warning_for_connect<C: ConsumerContext>(
     consumer: &rdkafka::consumer::BaseConsumer<C>,
-    brokers: &str,
+    _brokers: &str,
 ) -> Option<String> {
     let report = inspect_advertised_brokers(consumer).ok()?;
     if !report.unresolved.is_empty() {
-        return Some(format_hosts_guidance(&report.unresolved, brokers));
+        return Some(format_unresolved(&report.unresolved));
     }
     if let Some(ip) = report.collapsed_to_one_ip() {
-        let hosts: Vec<_> = report.resolved.keys().cloned().collect();
-        return Some(format_collapsed_dns_guidance(&hosts, ip, brokers));
+        return Some(format_collapsed(ip, report.resolved.len()));
     }
     // Multi-A (hosts + DNS) is noisy and environment-specific — do not surface in UI.
     None
@@ -176,15 +111,14 @@ pub fn dns_warning_for_connect<C: ConsumerContext>(
 
 pub fn ensure_advertised_brokers_resolvable<C: ConsumerContext>(
     consumer: &rdkafka::consumer::BaseConsumer<C>,
-    brokers: &str,
+    _brokers: &str,
 ) -> Result<(), String> {
     let report = inspect_advertised_brokers(consumer)?;
     if !report.unresolved.is_empty() {
-        return Err(format_hosts_guidance(&report.unresolved, brokers));
+        return Err(format_unresolved(&report.unresolved));
     }
     if let Some(ip) = report.collapsed_to_one_ip() {
-        let hosts: Vec<_> = report.resolved.keys().cloned().collect();
-        return Err(format_collapsed_dns_guidance(&hosts, ip, brokers));
+        return Err(format_collapsed(ip, report.resolved.len()));
     }
     Ok(())
 }

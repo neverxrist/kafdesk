@@ -880,9 +880,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function selectTopic(name: string) {
-    // Stop background watermark enrich so it does not steal the Kafka session.
+    // Pause enrich; cancel in-flight consume. Only auto-read on Consume tab —
+    // Produce-only ACL connections must not hit GroupAuthorizationFailed on click.
     enrichGenRef.current += 1
-    // Invalidate in-flight consume so a detach race does not look like a dead session.
     consumeGenRef.current += 1
     setSelectedTopic(name)
     setProducePartition(null)
@@ -894,58 +894,62 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTopicGroupLags(null)
     setError(null)
     resetPartitionToAll()
+    const wantConsume = tabRef.current === 'consume'
     try {
       if (tailing) {
         await window.kafdesk.tailStop()
         setTailing(false)
       }
-      // Brief retry: previous consume may still hold the detached session for a moment.
-      let details: TopicInfo | null = null
-      let lastErr = ''
-      for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const details = await window.kafdesk.getTopicOffsets(name)
         if (selectedTopicRef.current !== name) return
-        try {
-          details = await window.kafdesk.getTopicOffsets(name)
-          break
-        } catch (err) {
-          lastErr = stripIpcError(err instanceof Error ? err.message : String(err))
-          if (!/not connected to kafka/i.test(lastErr) || attempt === 3) throw err
-          await new Promise((r) => setTimeout(r, 150 + attempt * 150))
+        setTopicDetails(details)
+        setTopics((prev) =>
+          prev.map((t) =>
+            t.name === name
+              ? { ...t, approxMessages: details.approxMessages, partitions: details.partitions }
+              : t,
+          ),
+        )
+        if (!wantConsume) return
+        await loadMessages(name, { ...filterStateRef.current, partitionFilter: 'all' }, details)
+      } catch (err) {
+        if (!wantConsume) {
+          // Offsets/watermarks optional for produce — keep topic selected.
+          return
         }
+        throw err
       }
-      if (!details) throw new Error(lastErr || 'Not connected to Kafka')
       if (selectedTopicRef.current !== name) return
-      setTopicDetails(details)
-      setTopics((prev) =>
-        prev.map((t) =>
-          t.name === name
-            ? { ...t, approxMessages: details.approxMessages, partitions: details.partitions }
-            : t,
-        ),
-      )
-      // Do not await — previous topic's consume / lag must not block switching.
-      void loadMessages(name, { ...filterStateRef.current, partitionFilter: 'all' }, details)
-      // Lag is best-effort and slow (GroupCoordinator); never block topic UX on it.
-      const lagTopic = name
-      window.setTimeout(() => {
-        if (selectedTopicRef.current !== lagTopic) return
-        void window.kafdesk
-          .getLagSummary?.(lagTopic)
-          .then((res) => {
-            if (selectedTopicRef.current !== lagTopic) return
-            setTopicGroupLags(
-              res.groups.map((g) => ({ groupId: g.groupId, totalLag: g.totalLag })),
-            )
-          })
-          .catch(() => {
-            if (selectedTopicRef.current === lagTopic) setTopicGroupLags(null)
-          })
-      }, 0)
+      // After messages — never race GroupCoordinator against consume.
+      void window.kafdesk
+        .getLagSummary?.(name)
+        .then((res) => {
+          if (selectedTopicRef.current !== name) return
+          setTopicGroupLags(
+            res.groups.map((g) => ({ groupId: g.groupId, totalLag: g.totalLag })),
+          )
+        })
+        .catch(() => {
+          if (selectedTopicRef.current === name) setTopicGroupLags(null)
+        })
     } catch (err) {
       const msg = stripIpcError(err instanceof Error ? err.message : String(err))
       setError(msg)
       setLoadingMessages(false)
-      // Do not abandon on "Not connected" here — brief races must not look like logout.
+    }
+  }
+
+  function changeTab(next: typeof tab) {
+    const prev = tabRef.current
+    setTab(next)
+    if (
+      next === 'consume' &&
+      prev !== 'consume' &&
+      selectedTopicRef.current &&
+      connected
+    ) {
+      void loadMessages(selectedTopicRef.current)
     }
   }
 
@@ -1051,7 +1055,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
           uiTimeout = setTimeout(() => {
             reject(
               new Error(
-                'Consume timed out (20s). Check broker reachability, DNS for advertised listeners, or consumer-group ACL.',
+                'Consume timed out (20s). Broker slow or previous request still finishing — try again.',
               ),
             )
           }, 20_000)
@@ -1414,7 +1418,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     error,
     detailsRef,
     tab,
-    setTab,
+    setTab: changeTab,
     selectedTopic,
     topicDetails,
     topicGroupLags,

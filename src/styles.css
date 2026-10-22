@@ -125,11 +125,13 @@ body,
   color: var(--text);
   font-family: var(--font);
   font-weight: 500;
-  font-size: 14.5px;
+  /* Integer px — 14.5 + grayscale AA looks muddy on 125%/150% (2K) DPI. */
+  font-size: 14px;
   letter-spacing: 0;
-  /* geometricPrecision + subpixel re-rasterize glyphs on scroll → janky packaged UI */
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+  text-rendering: auto;
+  /* Let the platform pick subpixel vs grayscale; forced antialiased softens 2K. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
   /* Transparent macOS windows rubber-band the whole UI on swipe/wheel */
   overscroll-behavior: none;
   overflow: hidden;
@@ -426,7 +428,7 @@ textarea:focus {
 
 .topbar-conn-text strong {
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -538,7 +540,7 @@ textarea:focus {
   color: var(--muted);
   padding: 0.32rem 0.55rem;
   font-size: 0.8rem;
-  font-weight: 550;
+  font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -826,30 +828,21 @@ textarea:focus {
 }
 
 .settings-btn,
+.logs-btn,
 .theme-btn {
   width: 1.85rem;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  line-height: 0;
 }
 
-.logs-btn {
-  width: auto;
-  min-width: 1.85rem;
-  padding: 0 0.35rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.logs-btn-label {
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1;
-  text-transform: lowercase;
+.settings-btn svg,
+.logs-btn svg,
+.theme-btn svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .settings-btn.active,
@@ -1000,7 +993,7 @@ textarea:focus {
   overscroll-behavior: contain;
 }
 
-/* Match denser SR / toolbar scale — body 14.5px reads huge in the drawer */
+/* Match denser SR / toolbar scale — keep drawer slightly tighter than body */
 .sidebar > .panel input,
 .sidebar > .panel select,
 .sidebar > .panel textarea {
@@ -1340,6 +1333,59 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+/* Connection details: session ops vs profile ops */
+.conn-form-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+}
+
+.conn-form-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.conn-form-actions-row.session {
+  flex-wrap: nowrap;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.conn-form-actions-row.session .conn-ping-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.conn-form-actions-row.profile {
+  justify-content: flex-start;
+}
+
+.conn-form-actions-row .danger-btn {
+  margin-left: auto;
+}
+
+.sidebar > .panel .conn-form-actions button {
+  font-size: 0.78rem;
+  padding: 0.4rem 0.65rem;
+}
+
+.sidebar > .panel .conn-form-actions .conn-ping-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.05rem;
+  min-width: 2.05rem;
+  padding: 0.4rem 0;
+  line-height: 0;
+}
+
+.sidebar > .panel .conn-form-actions .conn-ping-btn svg {
+  display: block;
+}
+
 .status-block {
   margin-top: 0.75rem;
 }
@@ -1435,7 +1481,7 @@ textarea:focus {
   margin: 0;
   padding: 0;
   font-size: 0.62rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
@@ -1473,7 +1519,7 @@ textarea:focus {
   display: block;
   height: 0.85rem;
   font-size: 0.65rem;
-  font-weight: 550;
+  font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--muted);
   line-height: 0.85rem;
@@ -1673,7 +1719,7 @@ textarea:focus {
 
 .toolbar-adv-caption {
   font-size: 0.62rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
@@ -1837,7 +1883,7 @@ textarea:focus {
 
 .lag-badge {
   color: var(--warn);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .update-box {
@@ -2174,7 +2220,7 @@ body.topics-resizing * {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   font-size: 0.68rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -2391,13 +2437,16 @@ body.topics-resizing * {
   min-height: 260px;
   width: 100%;
   box-sizing: border-box;
-  padding-bottom: 2.1rem;
+  /* Room for clear (top-right) — leave bottom-right free for native resize grip. */
+  padding-top: 2.1rem;
+  padding-right: 0.55rem;
 }
 
 .produce-value-clear {
   position: absolute;
   right: 0.45rem;
-  bottom: 0.4rem;
+  top: 0.4rem;
+  z-index: 1;
   width: 1.7rem;
   height: 1.7rem;
   padding: 0;
@@ -2848,7 +2897,7 @@ body.topics-resizing * {
   text-transform: none;
   letter-spacing: 0;
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -3592,7 +3641,7 @@ textarea {
   color: var(--text);
   font-family: var(--mono);
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .partition-msgs {

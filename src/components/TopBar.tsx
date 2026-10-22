@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import type { AuthSessionPublic, ClusterConfig, SchemaRegistryStatus } from '../types/kafdesk'
 import type { Theme } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
-import { ConnectIcon, ReconnectIcon } from './ConnActionIcons'
+import {
+  ConnectIcon,
+  LogsIcon,
+  MoonIcon,
+  ReconnectIcon,
+  SettingsIcon,
+  SunIcon,
+} from './ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -19,35 +26,6 @@ function SidebarPanelIcon() {
       <rect x="1.5" y="2.5" width="15" height="13" rx="2" stroke="currentColor" strokeWidth="1.4" />
       <path d="M6.5 2.5v13" stroke="currentColor" strokeWidth="1.4" />
       <rect x="3" y="4.5" width="2.2" height="9" rx="0.4" fill="currentColor" opacity="0.85" />
-    </svg>
-  )
-}
-
-/** Shown in dark mode — click switches to light. */
-function SunIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
-      <path
-        d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
-/** Shown in light mode — click switches to dark. */
-function MoonIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M13.2 9.1A5.4 5.4 0 0 1 6.9 2.8 5.6 5.6 0 1 0 13.2 9.1Z"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
     </svg>
   )
 }
@@ -256,9 +234,7 @@ export default function TopBar({
           title={tr('logs')}
           aria-label={tr('logs')}
         >
-          <span className="logs-btn-label" aria-hidden>
-            log
-          </span>
+          <LogsIcon />
         </button>
         <button
           className={`icon-btn settings-btn ${settingsActive ? 'active' : ''}`}
@@ -267,7 +243,7 @@ export default function TopBar({
           title={tr('settings')}
           aria-label={tr('settings')}
         >
-          ⚙
+          <SettingsIcon />
         </button>
         <button className="icon-btn" onClick={toggleLocale} type="button" title={tr('language')}>
           {tr('langSwitch')}

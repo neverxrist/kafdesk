@@ -56,18 +56,18 @@ impl KafkaSession {
         }
     }
 
-    /// Independent worker for long consume — live session stays in the mutex slot
-    /// so topic switch / offsets / disconnect are not blocked for the whole window.
-    pub(crate) fn clone_for_consume(&self) -> Result<Self, String> {
-        self.ensure_admin()?;
-        let admin: Admin = self
-            .base_config
-            .create()
-            .map_err(|e| format!("consume admin: {e}"))?;
+    /// Snapshot for background ops — live session stays in the mutex slot so
+    /// topic switch / offsets / disconnect are not blocked by long Kafka calls.
+    /// No fresh Admin/Producer: each librdkafka client burns FDs; workers use
+    /// short-lived metadata/consume clients only.
+    pub(crate) fn clone_for_worker(&self) -> Result<Self, String> {
+        if self.config.is_none() {
+            return Err("Not connected to Kafka".into());
+        }
         Ok(Self {
             config: self.config.clone(),
             producer: None,
-            admin: Some(admin),
+            admin: None,
             brokers: self.brokers.clone(),
             client_id: self.client_id.clone(),
             base_config: self.base_config.clone(),
@@ -251,6 +251,13 @@ impl KafkaSession {
         }
         Ok(())
     }
+    /// Connected config present (workers have no Admin — use this instead of ensure_admin).
+    pub(crate) fn ensure_config(&self) -> Result<(), String> {
+        if self.config.is_none() {
+            return Err("Not connected to Kafka".into());
+        }
+        Ok(())
+    }
     pub(crate) fn ensure_producer(&self) -> Result<(), String> {
         if self.producer.is_none() {
             return Err("Not connected to Kafka".into());
@@ -261,7 +268,6 @@ impl KafkaSession {
         self.make_consumer("kafdesk-meta")
     }
     pub fn list_topics(&self) -> Result<Vec<TopicInfo>, String> {
-        self.ensure_admin()?;
         let consumer = self.metadata_consumer()?;
         let meta = consumer
             .fetch_metadata(None, Duration::from_secs(15))
@@ -296,10 +302,10 @@ impl KafkaSession {
         Ok(topics)
     }
     pub fn get_topic_offsets(&self, topic: &str) -> Result<TopicInfo, String> {
-        self.ensure_admin()?;
         let mut consumer = self.metadata_consumer()?;
         // No hard DNS ensure here — enrich calls this for every topic and must stay fast.
         // Consume still runs ensure_advertised_brokers_resolvable.
+        // At most one client recreate per call — recreating per partition blows the FD limit.
 
         let meta = consumer
             .fetch_metadata(Some(topic), Duration::from_secs(5))
@@ -333,6 +339,7 @@ impl KafkaSession {
         let mut approx_total = 0i64;
         // Keep enrich snappy — soft-fail watermarks; consume does not need every high watermark.
         let deadline = Instant::now() + Duration::from_secs(8);
+        let mut recreated = false;
 
         for (pid, mut leader, mut replicas, mut isr) in part_meta {
             if Instant::now() >= deadline {
@@ -341,7 +348,7 @@ impl KafkaSession {
             }
 
             let mut got: Option<(i64, i64)> = None;
-            for attempt in 0..3 {
+            for attempt in 0..2 {
                 match consumer.fetch_watermarks(topic, pid, Duration::from_secs(2)) {
                     Ok(wh) => {
                         got = Some(wh);
@@ -355,12 +362,14 @@ impl KafkaSession {
                             || msg.contains("NetworkException")
                             || msg.contains("Broker transport")
                             || msg.contains("Timed out");
-                        if !retryable || attempt == 2 {
+                        if !retryable || attempt == 1 {
                             break;
                         }
-                        // Recreate client — refresh alone often keeps a poisoned broker connection.
-                        if let Ok(c) = self.metadata_consumer() {
-                            consumer = c;
+                        if !recreated {
+                            if let Ok(c) = self.metadata_consumer() {
+                                consumer = c;
+                                recreated = true;
+                            }
                         }
                         if let Ok(m) = consumer.fetch_metadata(Some(topic), Duration::from_secs(3)) {
                             if let Some(p) = m
@@ -374,7 +383,7 @@ impl KafkaSession {
                                 isr = p.isr().to_vec();
                             }
                         }
-                        std::thread::sleep(Duration::from_millis(80 + attempt as u64 * 80));
+                        std::thread::sleep(Duration::from_millis(100));
                     }
                 }
             }

@@ -7,16 +7,55 @@ use crate::types::*;
 use super::consume_ctx::ConsumeCtx;
 use super::decode::headers_from_message;
 use super::session::KafkaSession;
-use rdkafka::config::FromClientConfigAndContext;
+use rdkafka::config::{ClientConfig, FromClientConfigAndContext};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::Message;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 impl KafkaSession {
-    pub async fn consume(&self, request: ConsumeRequest) -> Result<Vec<KafkaMessageView>, String> {
-        self.ensure_admin()?;
+    fn consume_group_id(&self) -> String {
+        self.config
+            .as_ref()
+            .and_then(|c| c.sasl.as_ref())
+            .map(|s| s.username.trim())
+            .filter(|u| !u.is_empty())
+            .map(|u| format!("kafdesk-{u}"))
+            .unwrap_or_else(|| "kafdesk-ui".into())
+    }
+
+    /// Shared librdkafka knobs for assign()-only browse (no commit / minimal coordinator).
+    fn consume_client_config(&self) -> (ClientConfig, String) {
+        let group_id = self.consume_group_id();
+        let mut cfg = self.base_config.clone();
+        cfg.set("group.id", &group_id);
+        cfg.set("enable.auto.commit", "false");
+        cfg.set("enable.auto.offset.store", "false");
+        cfg.set("auto.offset.reset", "earliest");
+        cfg.set("enable.partition.eof", "true");
+        cfg.set("socket.timeout.ms", "5000");
+        cfg.set("socket.connection.setup.timeout.ms", "5000");
+        cfg.set("session.timeout.ms", "6000");
+        cfg.set("reconnect.backoff.ms", "100");
+        cfg.set("reconnect.backoff.max.ms", "1000");
+        cfg.set("metadata.request.timeout.ms", "5000");
+        cfg.set("coordinator.query.interval.ms", "600000");
+        (cfg, group_id)
+    }
+
+    pub async fn consume_cancellable(
+        &self,
+        request: ConsumeRequest,
+        gen: Arc<AtomicU64>,
+        my_gen: u64,
+    ) -> Result<Vec<KafkaMessageView>, String> {
+        self.ensure_config()?;
+        if gen.load(Ordering::SeqCst) != my_gen {
+            return Ok(vec![]);
+        }
         let (topic_offsets, partition_ids_fallback) = {
             if let Some(ref hints) = request.partition_watermarks {
                 if !hints.is_empty() {
@@ -64,7 +103,7 @@ impl KafkaSession {
                 return Ok(vec![]);
             }
             return self
-                .consume_relative_offsets(&request, &start_from, &parts)
+                .consume_relative_offsets(&request, &start_from, &parts, gen, my_gen)
                 .await;
         }
 
@@ -111,37 +150,12 @@ impl KafkaSession {
             return Ok(vec![]);
         }
 
-        let mut cfg = self.base_config.clone();
-        // Prefer stable group id (ACL). Random UUIDs often get GroupAuthorizationFailed.
-        let group_id = self
-            .config
-            .as_ref()
-            .and_then(|c| c.sasl.as_ref())
-            .map(|s| s.username.trim())
-            .filter(|u| !u.is_empty())
-            .map(|u| format!("kafdesk-{u}"))
-            .unwrap_or_else(|| "kafdesk-ui".into());
-        cfg.set("group.id", &group_id);
-        cfg.set("enable.auto.commit", "false");
-        cfg.set("enable.auto.offset.store", "false");
-        cfg.set("auto.offset.reset", "earliest");
-        cfg.set("enable.partition.eof", "true");
-        // Fail fast when advertised brokers are unreachable (DNS / transport flaps).
-        cfg.set("socket.timeout.ms", "5000");
-        cfg.set("socket.connection.setup.timeout.ms", "5000");
-        cfg.set("session.timeout.ms", "6000");
-        cfg.set("reconnect.backoff.ms", "100");
-        cfg.set("reconnect.backoff.max.ms", "1000");
-        cfg.set("metadata.request.timeout.ms", "5000");
-        // Don't spam FindCoordinator while we only use assign() (no commit).
-        cfg.set("coordinator.query.interval.ms", "600000");
-
+        let (cfg, group_id) = self.consume_client_config();
         let ctx = ConsumeCtx::default();
         let err_slot = ctx.clone();
         let consumer: BaseConsumer<ConsumeCtx> =
             BaseConsumer::from_config_and_context(&cfg, ctx).map_err(|e| e.to_string())?;
-
-        // Bootstrap IP can work while advertised.listeners DNS does not — hang forever otherwise.
+        // Bootstrap IP can work while advertised.listeners DNS does not.
         super::dns_check::ensure_advertised_brokers_resolvable(&consumer, &self.brokers)?;
 
         let mut tpl = TopicPartitionList::new();
@@ -176,6 +190,9 @@ impl KafkaSession {
         let mut last_msg = Instant::now();
 
         while Instant::now() < deadline {
+            if gen.load(Ordering::SeqCst) != my_gen {
+                break;
+            }
             if finished_partitions.len() >= plan.target_partitions.len() {
                 break;
             }
@@ -332,25 +349,14 @@ impl KafkaSession {
         request: &ConsumeRequest,
         start_from: &str,
         partitions: &[i32],
+        gen: Arc<AtomicU64>,
+        my_gen: u64,
     ) -> Result<Vec<KafkaMessageView>, String> {
+        if gen.load(Ordering::SeqCst) != my_gen {
+            return Ok(vec![]);
+        }
         let limit = crate::domain::clamp_consume_limit(request.limit);
-        let mut cfg = self.base_config.clone();
-        let group_id = self
-            .config
-            .as_ref()
-            .and_then(|c| c.sasl.as_ref())
-            .map(|s| s.username.trim())
-            .filter(|u| !u.is_empty())
-            .map(|u| format!("kafdesk-{u}"))
-            .unwrap_or_else(|| "kafdesk-ui".into());
-        cfg.set("group.id", &group_id);
-        cfg.set("enable.auto.commit", "false");
-        cfg.set("enable.auto.offset.store", "false");
-        cfg.set("enable.partition.eof", "true");
-        cfg.set("socket.timeout.ms", "5000");
-        cfg.set("socket.connection.setup.timeout.ms", "5000");
-        cfg.set("coordinator.query.interval.ms", "600000");
-
+        let (cfg, _group_id) = self.consume_client_config();
         let ctx = ConsumeCtx::default();
         let err_slot = ctx.clone();
         let consumer: BaseConsumer<ConsumeCtx> =
@@ -391,6 +397,9 @@ impl KafkaSession {
         let mut eof = 0usize;
 
         while Instant::now() < deadline && messages.len() < limit as usize {
+            if gen.load(Ordering::SeqCst) != my_gen {
+                break;
+            }
             if eof >= partitions.len() && !messages.is_empty() {
                 break;
             }

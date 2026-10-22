@@ -2,16 +2,14 @@ use crate::types::*;
 use super::session::{KafkaSession, BConsumer};
 use rdkafka::consumer::Consumer;
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 impl KafkaSession {
     pub fn list_consumer_groups(&self) -> Result<Vec<ConsumerGroupInfo>, String> {
-        self.ensure_admin()?;
-        let admin = self.admin.as_ref().unwrap();
-        // rdkafka list_groups
         let consumer = self.metadata_consumer()?;
+        // Keep short — GroupCoordinator SASL failures otherwise pin the UI for ages.
         let groups = consumer
-            .fetch_group_list(None, Duration::from_secs(15))
+            .fetch_group_list(None, Duration::from_secs(4))
             .map_err(|e| e.to_string())?;
         let mut out = Vec::new();
         for g in groups.groups() {
@@ -30,7 +28,6 @@ impl KafkaSession {
                 lag_partitions: None,
             });
         }
-        let _ = admin;
         Ok(out)
     }
     pub fn get_group_offsets(
@@ -38,7 +35,6 @@ impl KafkaSession {
         group_id: &str,
         topic: Option<&str>,
     ) -> Result<Vec<GroupOffsetEntry>, String> {
-        self.ensure_admin()?;
         let mut cfg = self.base_config.clone();
         cfg.set("group.id", group_id);
         cfg.set("enable.auto.commit", "false");
@@ -102,7 +98,11 @@ impl KafkaSession {
     pub fn get_lag_summary(&self, topic: Option<&str>) -> Result<LagSummaryResult, String> {
         let groups = self.list_consumer_groups()?;
         let mut summaries = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(6);
         for g in groups {
+            if Instant::now() >= deadline {
+                break;
+            }
             let offsets = match self.get_group_offsets(&g.group_id, topic) {
                 Ok(o) => o,
                 Err(_) => Vec::new(),
@@ -155,7 +155,7 @@ impl KafkaSession {
         })
     }
     pub fn set_group_offsets(&self, request: SetGroupOffsetsRequest) -> Result<(), String> {
-        self.ensure_admin()?;
+        self.ensure_config()?;
         let mut cfg = self.base_config.clone();
         cfg.set("group.id", &request.group_id);
         cfg.set("enable.auto.commit", "false");

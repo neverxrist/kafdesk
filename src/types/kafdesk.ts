@@ -279,7 +279,7 @@ export interface ConnectResult {
   ok: boolean
   schemaRegistry: SchemaRegistryStatus
   schemaRegistryError?: string
-  /** Advertised broker DNS missing locally — consume needs /etc/hosts or fixed listeners. */
+  /** Advertised broker DNS problem (unresolved / collapsed). */
   brokerDnsWarning?: string
 }
 

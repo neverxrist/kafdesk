@@ -2,12 +2,22 @@ use crate::auth::AuthState;
 use crate::kafka::KafkaSession;
 use crate::types::*;
 use crate::updates::UpdateState;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
+
+/// Hot path (offsets + consume) — never share with GroupCoordinator lag walks.
+const KAFKA_HOT_SLOTS: usize = 2;
+/// Background (lag / enrich-friendly). try_acquire only — never blocks hot path.
+const KAFKA_BG_SLOTS: usize = 1;
 
 pub struct AppState {
     pub kafka: Mutex<KafkaSession>,
+    pub kafka_hot: Arc<Semaphore>,
+    pub kafka_bg: Arc<Semaphore>,
+    /// Bumped on each consume start — older poll loops exit so topic switches don't queue.
+    pub consume_gen: Arc<AtomicU64>,
     pub auth: AuthState,
     pub updates: UpdateState,
 }
@@ -16,6 +26,9 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             kafka: Mutex::new(KafkaSession::new()),
+            kafka_hot: Arc::new(Semaphore::new(KAFKA_HOT_SLOTS)),
+            kafka_bg: Arc::new(Semaphore::new(KAFKA_BG_SLOTS)),
+            consume_gen: Arc::new(AtomicU64::new(0)),
             auth: AuthState::new(),
             updates: UpdateState::new(),
         }
@@ -85,19 +98,51 @@ pub async fn kafka_probe(config: ClusterConfig) -> Result<PingResult, String> {
     KafkaSession::probe(config).await
 }
 
-/// Snapshot worker for read ops — never empty the live session slot (topic switch / disconnect).
+/// Hot-path worker (topic offsets / list) — waits for a slot.
 async fn with_session_worker<T, F>(state: &AppState, op: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(KafkaSession) -> Result<T, String> + Send + 'static,
 {
+    let permit = state
+        .kafka_hot
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "Kafka worker interrupted".to_string())?;
     let worker = {
         let guard = state.kafka.lock().await;
-        guard.clone_for_consume()?
+        guard.clone_for_worker()?
     };
-    tokio::task::spawn_blocking(move || op(worker))
-        .await
-        .map_err(|e| format!("kafka worker join: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        op(worker)
+    })
+    .await
+    .map_err(|e| format!("kafka worker join: {e}"))?
+}
+
+/// Background worker (lag) — skip immediately if busy so consume never waits behind coordinator.
+async fn with_session_worker_bg<T, F>(state: &AppState, op: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(KafkaSession) -> Result<T, String> + Send + 'static,
+{
+    let permit = state
+        .kafka_bg
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| "Kafka background busy".to_string())?;
+    let worker = {
+        let guard = state.kafka.lock().await;
+        guard.clone_for_worker()?
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        op(worker)
+    })
+    .await
+    .map_err(|e| format!("kafka worker join: {e}"))?
 }
 
 #[tauri::command]
@@ -152,16 +197,26 @@ pub async fn kafka_consume(
     state: State<'_, Arc<AppState>>,
     request: ConsumeRequest,
 ) -> Result<Vec<KafkaMessageView>, String> {
+    let my_gen = state.consume_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let gen = Arc::clone(&state.consume_gen);
+    let permit = state
+        .kafka_hot
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "Kafka worker interrupted".to_string())?;
+    // Drop if a newer consume already started while we waited for a hot slot.
+    if gen.load(Ordering::SeqCst) != my_gen {
+        return Ok(vec![]);
+    }
     let worker = {
         let guard = state.kafka.lock().await;
-        guard.clone_for_consume()?
+        guard.clone_for_worker()?
     };
+    // No nested tokio Runtime per click — that alone burns FDs until EMFILE.
     tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("consume runtime: {e}"))?;
-        rt.block_on(worker.consume(request))
+        let _permit = permit;
+        futures::executor::block_on(worker.consume_cancellable(request, gen, my_gen))
     })
     .await
     .map_err(|e| format!("consume join: {e}"))?
@@ -204,8 +259,8 @@ pub async fn kafka_get_latest_schema(
 pub async fn kafka_list_consumer_groups(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<ConsumerGroupInfo>, String> {
-    // Must not hold the live slot — group listing hits GroupCoordinator and can stall for ages.
-    with_session_worker(&state, |session| session.list_consumer_groups()).await
+    // GroupCoordinator — background only; never block consume/offsets.
+    with_session_worker_bg(&state, |session| session.list_consumer_groups()).await
 }
 
 #[tauri::command]
@@ -214,7 +269,7 @@ pub async fn kafka_get_group_offsets(
     group_id: String,
     topic: Option<String>,
 ) -> Result<Vec<GroupOffsetEntry>, String> {
-    with_session_worker(&state, move |session| {
+    with_session_worker_bg(&state, move |session| {
         session.get_group_offsets(&group_id, topic.as_deref())
     })
     .await
@@ -225,11 +280,20 @@ pub async fn kafka_get_lag_summary(
     state: State<'_, Arc<AppState>>,
     topic: Option<String>,
 ) -> Result<LagSummaryResult, String> {
-    // Lag walks every group via coordinator — previously pinned the mutex and froze topic switches.
-    with_session_worker(&state, move |session| {
+    // Lag walks groups via coordinator — bg try_acquire so topic switches stay snappy.
+    match with_session_worker_bg(&state, move |session| {
         session.get_lag_summary(topic.as_deref())
     })
     .await
+    {
+        Err(e) if e.contains("background busy") => Ok(LagSummaryResult {
+            groups: vec![],
+            total_lag: 0,
+            max_lag: 0,
+            updated_at: 0,
+        }),
+        other => other,
+    }
 }
 
 #[tauri::command]

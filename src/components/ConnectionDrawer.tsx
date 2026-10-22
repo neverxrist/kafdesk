@@ -4,7 +4,14 @@ import type { AuthMethodUi } from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
 import PasswordInput from './PasswordInput'
 import PathBrowseInput from './PathBrowseInput'
-import { ConnectIcon, DelIcon, DupIcon, EditIcon, ReconnectIcon } from './ConnActionIcons'
+import {
+  ConnectIcon,
+  DelIcon,
+  DupIcon,
+  EditIcon,
+  PingIcon,
+  ReconnectIcon,
+} from './ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -573,53 +580,69 @@ export default function ConnectionDrawer({
             )}
           </div>
 
-          <div className="actions">
-            <button type="button" disabled={busy} onClick={onSaveConnectionDetails}>
-              {tr('save')}
-            </button>
-            <button
-              type="button"
-              className="primary icon-action"
-              disabled={busy || connected || !canConnect}
-              onClick={onConnect}
-              title={tr('connect')}
-              aria-label={tr('connect')}
-            >
-              <ConnectIcon />
-              <span>{tr('connect')}</span>
-            </button>
-            <button
-              type="button"
-              className="icon-action"
-              disabled={busy || !connected}
-              onClick={onReconnect}
-              title={tr('reconnect')}
-              aria-label={tr('reconnect')}
-            >
-              <ReconnectIcon />
-              <span>{tr('reconnect')}</span>
-            </button>
-            <button
-              disabled={!connected}
-              onClick={onDisconnect}
-              title={busy ? tr('disconnectBusy') : undefined}
-            >
-              {tr('disconnect')}
-            </button>
-            <button disabled={busy || !canConnect} onClick={onPing}>
-              {tr('ping')}
-            </button>
-            <button type="button" disabled={busy} onClick={() => onDuplicateConnection(activeId)}>
-              {tr('duplicate')}
-            </button>
-            <button
-              type="button"
-              className="danger-btn"
-              disabled={busy}
-              onClick={() => onRequestDeleteConnection(activeId)}
-            >
-              {tr('delete')}
-            </button>
+          <div className="conn-form-actions">
+            <div className="conn-form-actions-row session" role="group" aria-label={tr('connect')}>
+              <button
+                type="button"
+                className="primary icon-action"
+                disabled={busy || connected || !canConnect}
+                onClick={onConnect}
+                title={tr('connect')}
+                aria-label={tr('connect')}
+              >
+                <ConnectIcon />
+                <span>{tr('connect')}</span>
+              </button>
+              <button
+                type="button"
+                className="icon-action"
+                disabled={busy || !connected}
+                onClick={onReconnect}
+                title={tr('reconnect')}
+                aria-label={tr('reconnect')}
+              >
+                <ReconnectIcon />
+                <span>{tr('reconnect')}</span>
+              </button>
+              <button
+                type="button"
+                disabled={!connected}
+                onClick={onDisconnect}
+                title={busy ? tr('disconnectBusy') : undefined}
+              >
+                {tr('disconnect')}
+              </button>
+              <button
+                type="button"
+                className="icon-action conn-ping-btn"
+                disabled={busy || !canConnect}
+                onClick={onPing}
+                title={tr('ping')}
+                aria-label={tr('ping')}
+              >
+                <PingIcon />
+              </button>
+            </div>
+            <div className="conn-form-actions-row profile" role="group" aria-label={tr('edit')}>
+              <button type="button" disabled={busy} onClick={onSaveConnectionDetails}>
+                {tr('save')}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onDuplicateConnection(activeId)}
+              >
+                {tr('duplicate')}
+              </button>
+              <button
+                type="button"
+                className="danger-btn"
+                disabled={busy}
+                onClick={() => onRequestDeleteConnection(activeId)}
+              >
+                {tr('delete')}
+              </button>
+            </div>
           </div>
 
           <div className="status status-block">
