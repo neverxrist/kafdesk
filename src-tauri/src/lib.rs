@@ -1,11 +1,14 @@
 mod auth;
 mod avro_codec;
 mod commands;
+mod debug_log;
 mod domain;
 mod kafka;
+mod tls_resolve;
 mod sr;
 mod types;
 mod updates;
+mod webview_memory;
 
 use commands::AppState;
 use std::sync::Arc;
@@ -29,6 +32,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::ping_shell,
+            commands::set_backend_debug,
+            commands::get_backend_debug,
             commands::kafka_connect,
             commands::kafka_disconnect,
             commands::kafka_status,
@@ -48,6 +53,7 @@ pub fn run() {
             commands::kafka_reset_group_offsets,
             commands::kafka_tail_start,
             commands::kafka_tail_stop,
+            commands::kafka_tail_set_filter,
             commands::dialog_pick_pem_file,
             commands::dialog_pick_avsc_file,
             commands::auth_list_providers,
@@ -64,6 +70,9 @@ pub fn run() {
             commands::app_open_releases,
             commands::app_get_version,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running KafDesk");
+        .build(tauri::generate_context!())
+        .expect("error while building KafDesk")
+        .run(|app, event| {
+            webview_memory::on_run_event(app, &event);
+        });
 }

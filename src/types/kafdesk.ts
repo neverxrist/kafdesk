@@ -25,6 +25,18 @@ export interface ConnectionSsoConfig {
   oidc?: OidcSsoConfig
 }
 
+/** PEM paths on disk for Kafka broker SSL and/or Schema Registry HTTPS. */
+export interface TlsPemConfig {
+  caPath?: string
+  certPath?: string
+  keyPath?: string
+  /** default true; set false for lab / self-signed without CA */
+  rejectUnauthorized?: boolean
+}
+
+/** Soft env badge on a saved connection (avoids mixing prod/stage). */
+export type ConnectionEnvTag = 'prod' | 'stage' | 'dev' | 'other'
+
 export interface ClusterConfig {
   id: string
   name: string
@@ -43,17 +55,20 @@ export interface ClusterConfig {
     username: string
     password: string
   }
+  /** Kafka broker SSL PEMs (when `ssl` is on). */
+  kafkaTls?: TlsPemConfig
   /**
-   * Optional TLS PEMs on disk — used for Kafka SSL (broker) and Schema Registry HTTPS.
-   * Field name is historical; applies to the whole connection when SSL is on.
+   * Schema Registry HTTPS PEMs when not reusing Kafka TLS.
+   * Legacy: older saves stored shared PEMs only here — still read as Kafka fallback.
    */
-  schemaRegistryTls?: {
-    caPath?: string
-    certPath?: string
-    keyPath?: string
-    /** default true; set false for lab / self-signed without CA */
-    rejectUnauthorized?: boolean
-  }
+  schemaRegistryTls?: TlsPemConfig
+  /**
+   * Opt-in: when true, SR HTTPS uses `kafkaTls` (or legacy `schemaRegistryTls`).
+   * When false/omitted, SR uses its own `schemaRegistryTls` paths.
+   */
+  schemaRegistryReuseKafkaTls?: boolean
+  /** Optional env badge: prod / stage / dev / other */
+  envTag?: ConnectionEnvTag
   /** SSO settings for this connection (Keycloak now, more later) */
   sso?: ConnectionSsoConfig
 }
@@ -193,6 +208,8 @@ export interface TailRequest {
   partitions?: number[]
   search?: string
   searchKey?: string
+  /** both | key | value — how `search` / `searchKey` apply */
+  searchScope?: 'both' | 'key' | 'value'
   searchHeaderKey?: string
   searchHeaderValue?: string
 }
@@ -286,4 +303,6 @@ export interface ConnectResult {
 export interface PingResult {
   kafka: { ok: boolean; ms?: number; error?: string }
   schemaRegistry: { status: SchemaRegistryStatus; ms?: number; error?: string }
+  /** Advertised-broker DNS note from the same probe, if any. */
+  dnsWarning?: string
 }

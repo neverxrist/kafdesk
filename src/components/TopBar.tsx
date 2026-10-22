@@ -126,7 +126,12 @@ export default function TopBar({
         >
           <span className={`dot ${connected ? 'on' : ''}`} />
           <div className="topbar-conn-text">
-            <strong title={config.name}>{config.name}</strong>
+            <strong title={config.name}>
+              {config.envTag ? (
+                <span className={`conn-env-tag env-${config.envTag}`}>{config.envTag}</span>
+              ) : null}
+              {config.name}
+            </strong>
             <small
               title={[
                 connected
@@ -164,7 +169,12 @@ export default function TopBar({
                     if (!active) void onSelectConnection(c.id)
                   }}
                 >
-                  <span className="topbar-conn-option-name">{c.name}</span>
+                  <span className="topbar-conn-option-name">
+                    {c.envTag ? (
+                      <span className={`conn-env-tag env-${c.envTag}`}>{c.envTag}</span>
+                    ) : null}
+                    {c.name}
+                  </span>
                   <small>{c.brokers[0] || '—'}</small>
                 </button>
               )

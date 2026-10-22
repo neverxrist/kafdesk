@@ -1,4 +1,5 @@
 use crate::avro_codec::decode_datum_to_json;
+use crate::domain::BrokerMessageFilter;
 use super::decode::{
     decode_owned_message, decode_with_avro_json,
     strip_confluent_wire,
@@ -13,7 +14,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer, StreamConsumer};
 use rdkafka::producer::FutureProducer;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -36,6 +37,9 @@ pub struct KafkaSession {
     pub(crate) schema_cache: Arc<std::sync::Mutex<HashMap<i32, String>>>,
     pub(crate) tailing: Arc<AtomicBool>,
     pub(crate) tail_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Live-updated while the tail task runs (search / key / headers / partitions).
+    pub(crate) tail_filter: Arc<StdMutex<BrokerMessageFilter>>,
+    pub(crate) tail_partitions: Arc<StdMutex<Option<Vec<i32>>>>,
 }
 
 impl KafkaSession {
@@ -53,6 +57,8 @@ impl KafkaSession {
             schema_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             tailing: Arc::new(AtomicBool::new(false)),
             tail_task: Mutex::new(None),
+            tail_filter: Arc::new(StdMutex::new(BrokerMessageFilter::default())),
+            tail_partitions: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -77,6 +83,8 @@ impl KafkaSession {
             schema_cache: Arc::clone(&self.schema_cache),
             tailing: Arc::clone(&self.tailing),
             tail_task: Mutex::new(None),
+            tail_filter: Arc::clone(&self.tail_filter),
+            tail_partitions: Arc::clone(&self.tail_partitions),
         })
     }
     pub(crate) fn make_consumer(&self, group_prefix: &str) -> Result<BConsumer, String> {
@@ -197,6 +205,11 @@ impl KafkaSession {
                 error: Some(e.to_string()),
             },
         };
+        let dns_warning = if kafka.ok {
+            super::dns_check::dns_warning_for_connect(&consumer, &self.brokers)
+        } else {
+            None
+        };
         let schema_registry = if let Some(ref reg) = self.registry {
             let t0 = Instant::now();
             match reg.probe().await {
@@ -221,15 +234,19 @@ impl KafkaSession {
         Ok(PingResult {
             kafka,
             schema_registry,
+            dns_warning,
         })
     }
     pub async fn probe(config: ClusterConfig) -> Result<PingResult, String> {
         let mut tmp = KafkaSession::new();
         match tmp.connect(config).await {
-            Ok(_) => {
-                let r = tmp.ping().await;
+            Ok(connect) => {
+                let mut r = tmp.ping().await?;
+                if r.dns_warning.is_none() {
+                    r.dns_warning = connect.broker_dns_warning;
+                }
                 tmp.disconnect().await;
-                r
+                Ok(r)
             }
             Err(e) => Ok(PingResult {
                 kafka: ProbePart {
@@ -242,6 +259,7 @@ impl KafkaSession {
                     ms: None,
                     error: None,
                 },
+                dns_warning: None,
             }),
         }
     }

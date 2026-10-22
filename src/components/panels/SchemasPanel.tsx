@@ -143,14 +143,14 @@ export default function SchemasPanel({
           {!selected && <div className="empty">{tr('selectSchemaSubject')}</div>}
           {selected && (
             <div className="panel schemas-detail-panel">
-              <h2 className="schemas-detail-title" title={selected}>
-                {selected}
-              </h2>
-              <div className="schemas-detail-actions">
+              <div className="schemas-detail-head">
+                <h2 className="schemas-detail-title" title={selected}>
+                  {selected}
+                </h2>
                 {onUseForProduce && (
                   <button
                     type="button"
-                    className="primary"
+                    className="primary schemas-use-produce"
                     disabled={busy || loading || !info}
                     onClick={() => onUseForProduce(selected)}
                     title={tr('topicSchemaUseTitle')}

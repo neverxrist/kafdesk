@@ -1,4 +1,5 @@
 import type { ConsumeStartFrom } from '../types/kafdesk'
+import type { SearchScope } from './searchScope'
 
 export const SAVED_QUERIES_KEY = 'kafdesk.savedQueries.v1'
 
@@ -9,6 +10,8 @@ export interface SavedConsumeQuery {
   topic: string | null
   search: string
   searchKey: string
+  /** Optional — older saves omit this; inferred from search/searchKey. */
+  searchScope?: SearchScope
   headerKey: string
   headerValue: string
   partitionFilter: string

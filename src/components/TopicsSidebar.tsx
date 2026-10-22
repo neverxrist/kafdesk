@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import EmptyState from './EmptyState'
+import TopicSchemaPanel from './TopicSchemaPanel'
 import type { TopicInfo } from '../types/kafdesk'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
@@ -18,6 +19,19 @@ import {
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
+type CtxMenu = { topic: string; x: number; y: number }
+type SchemaPopover = { topic: string; x: number; y: number }
+
+function clampPopoverPos(x: number, y: number, w: number, h: number) {
+  const pad = 8
+  const maxX = Math.max(pad, window.innerWidth - w - pad)
+  const maxY = Math.max(pad, window.innerHeight - h - pad)
+  return {
+    x: Math.min(Math.max(pad, x), maxX),
+    y: Math.min(Math.max(pad, y), maxY),
+  }
+}
+
 export default function TopicsSidebar({
   tr,
   connected,
@@ -28,6 +42,8 @@ export default function TopicsSidebar({
   onSelectTopic,
   pinnedTopics,
   onTogglePin,
+  subjects,
+  hasRegistry,
 }: {
   tr: Tr
   connected: boolean
@@ -38,6 +54,8 @@ export default function TopicsSidebar({
   onSelectTopic: (name: string) => void
   pinnedTopics: string[]
   onTogglePin: (name: string) => void
+  subjects: string[]
+  hasRegistry: boolean
 }) {
   const [topicsOpen, setTopicsOpen] = useState(() => loadTopicsOpen())
   const [topicsWidth, setTopicsWidth] = useState(() => loadTopicsWidth())
@@ -48,6 +66,10 @@ export default function TopicsSidebar({
   const [savedFilters, setSavedFilters] = useState<SavedTopicFilter[]>(() => loadTopicFilters())
   const [activeFilterIds, setActiveFilterIds] = useState<string[]>([])
   const [onlyPinned, setOnlyPinned] = useState(() => loadOnlyPinnedTopics())
+  const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
+  const [schemaPopover, setSchemaPopover] = useState<SchemaPopover | null>(null)
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null)
+  const schemaPopoverRef = useRef<HTMLDivElement | null>(null)
 
   function setTopicsPanelOpen(open: boolean) {
     setTopicsOpen(open)
@@ -86,6 +108,45 @@ export default function TopicsSidebar({
     resizeStart.current = { x: e.clientX, w: topicsWidth }
     setResizing(true)
     document.body.classList.add('topics-resizing')
+  }
+
+  useEffect(() => {
+    if (!ctxMenu && !schemaPopover) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setCtxMenu(null)
+        setSchemaPopover(null)
+      }
+    }
+    function onPointerDown(e: PointerEvent) {
+      const t = e.target as Node
+      if (ctxMenuRef.current?.contains(t)) return
+      if (schemaPopoverRef.current?.contains(t)) return
+      setCtxMenu(null)
+      setSchemaPopover(null)
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [ctxMenu, schemaPopover])
+
+  function onTopicContextMenu(e: ReactMouseEvent, topic: string) {
+    e.preventDefault()
+    e.stopPropagation()
+    setSchemaPopover(null)
+    setCtxMenu({ topic, x: e.clientX, y: e.clientY })
+  }
+
+  function openTopicSchema() {
+    if (!ctxMenu) return
+    const approxW = 420
+    const approxH = 320
+    const pos = clampPopoverPos(ctxMenu.x, ctxMenu.y, approxW, approxH)
+    setSchemaPopover({ topic: ctxMenu.topic, ...pos })
+    setCtxMenu(null)
   }
 
   const chipQueries = savedFilters
@@ -193,8 +254,9 @@ export default function TopicsSidebar({
         <button
           type="button"
           className="topic-item"
-          title={t.name}
+          title={`${t.name} · ${tr('topicSchemaCtxHint')}`}
           onClick={() => onSelectTopic(t.name)}
+          onContextMenu={(e) => onTopicContextMenu(e, t.name)}
         >
           <span className="topic-name">{t.name}</span>
           <span className="topic-stats" aria-label={tr('partitionsCount', { n: t.partitions.length })}>
@@ -383,6 +445,52 @@ export default function TopicsSidebar({
             </span>
           </button>
           {internalOpen && internal.map(renderTopic)}
+        </div>
+      )}
+
+      {ctxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="topic-ctx-menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          role="menu"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="topic-ctx-item"
+            onClick={openTopicSchema}
+          >
+            {tr('topicSchema')}
+          </button>
+        </div>
+      )}
+
+      {schemaPopover && (
+        <div
+          ref={schemaPopoverRef}
+          className="topic-schema-popover"
+          style={{ left: schemaPopover.x, top: schemaPopover.y }}
+          role="dialog"
+          aria-label={tr('topicSchema')}
+        >
+          <div className="topic-schema-popover-head">
+            <strong title={schemaPopover.topic}>{schemaPopover.topic}</strong>
+            <button
+              type="button"
+              className="topic-schema-popover-close"
+              aria-label={tr('close')}
+              onClick={() => setSchemaPopover(null)}
+            >
+              ×
+            </button>
+          </div>
+          <TopicSchemaPanel
+            tr={tr}
+            topic={schemaPopover.topic}
+            subjects={subjects}
+            hasRegistry={hasRegistry}
+          />
         </div>
       )}
     </section>

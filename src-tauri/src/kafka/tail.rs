@@ -18,6 +18,18 @@ use tauri::{AppHandle, Emitter};
 
 use super::session::SConsumer;
 
+fn filter_from_tail_request(request: &TailRequest) -> BrokerMessageFilter {
+    BrokerMessageFilter {
+        search: request.search.clone(),
+        search_key: request.search_key.clone(),
+        search_scope: request.search_scope.clone(),
+        header_key: request.search_header_key.clone(),
+        header_value: request.search_header_value.clone(),
+        time_from: None,
+        time_to: None,
+    }
+}
+
 impl KafkaSession {
     pub async fn start_tail(
         &self,
@@ -40,16 +52,16 @@ impl KafkaSession {
             .map_err(|e| e.to_string())?;
         self.tailing.store(true, Ordering::SeqCst);
 
-        let filter = BrokerMessageFilter {
-            search: request.search.clone(),
-            search_key: request.search_key.clone(),
-            header_key: request.search_header_key.clone(),
-            header_value: request.search_header_value.clone(),
-            time_from: None,
-            time_to: None,
-        };
-        let partitions = request.partitions.clone();
+        {
+            let mut f = self.tail_filter.lock().map_err(|e| e.to_string())?;
+            *f = filter_from_tail_request(&request);
+            let mut p = self.tail_partitions.lock().map_err(|e| e.to_string())?;
+            *p = request.partitions.clone();
+        }
+
         let tailing = self.tailing.clone();
+        let filter = self.tail_filter.clone();
+        let partitions = self.tail_partitions.clone();
         let registry = if self.sr_status == "ok" {
             self.registry.clone()
         } else {
@@ -63,9 +75,15 @@ impl KafkaSession {
                 match tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
                     Ok(Some(Ok(msg))) => {
                         let partition = msg.partition();
-                        if let Some(ref ps) = partitions {
-                            if !ps.contains(&partition) {
-                                continue;
+                        {
+                            let ps = match partitions.lock() {
+                                Ok(g) => g.clone(),
+                                Err(_) => continue,
+                            };
+                            if let Some(ref list) = ps {
+                                if !list.contains(&partition) {
+                                    continue;
+                                }
                             }
                         }
                         let key = msg.key();
@@ -75,7 +93,11 @@ impl KafkaSession {
                             | rdkafka::Timestamp::LogAppendTime(ms) => ms,
                             _ => 0,
                         };
-                        if !matches_raw_pre_filter(key, &ts.to_string(), &headers, &filter) {
+                        let snap = match filter.lock() {
+                            Ok(g) => g.clone(),
+                            Err(_) => continue,
+                        };
+                        if !matches_raw_pre_filter(key, &ts.to_string(), &headers, &snap) {
                             continue;
                         }
                         let view = decode_tail_message(
@@ -90,7 +112,7 @@ impl KafkaSession {
                             headers,
                         )
                         .await;
-                        if !matches_decoded_message(&view, &filter) {
+                        if !matches_decoded_message(&view, &snap) {
                             continue;
                         }
                         let _ = app.emit("kafka://tail-message", &view);
@@ -109,6 +131,23 @@ impl KafkaSession {
         *self.tail_task.lock().await = Some(handle);
         Ok(())
     }
+
+    /// Hot-swap search / key / header / partition filters without restarting the consumer.
+    pub fn set_tail_filter(&self, request: &TailRequest) -> Result<(), String> {
+        if !self.tailing.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        {
+            let mut f = self.tail_filter.lock().map_err(|e| e.to_string())?;
+            *f = filter_from_tail_request(request);
+        }
+        {
+            let mut p = self.tail_partitions.lock().map_err(|e| e.to_string())?;
+            *p = request.partitions.clone();
+        }
+        Ok(())
+    }
+
     pub async fn stop_tail(&self) {
         self.tailing.store(false, Ordering::SeqCst);
         if let Some(h) = self.tail_task.lock().await.take() {

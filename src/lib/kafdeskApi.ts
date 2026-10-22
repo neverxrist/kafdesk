@@ -47,8 +47,14 @@ export type KafDeskApi = {
   resetGroupOffsets: (groupId: string, topic: string, earliest: boolean) => Promise<{ ok: boolean }>
   tailStart: (request: TailRequest) => Promise<{ ok: boolean }>
   tailStop: () => Promise<{ ok: boolean }>
+  /** Hot-swap filters while live tail is running (no consumer restart). */
+  tailSetFilter: (request: TailRequest) => Promise<{ ok: boolean }>
   onTailMessage: (cb: (msg: KafkaMessageView) => void) => () => void
   onTailError: (cb: (message: string) => void) => () => void
+  /** Opt-in Rust breadcrumbs for the Logs tab (default off). */
+  setBackendDebug: (enabled: boolean) => Promise<{ ok: boolean }>
+  getBackendDebug: () => Promise<boolean>
+  onBackendDebugLog: (cb: (level: 'info' | 'warn' | 'error', msg: string) => void) => () => void
   listAuthProviders: () => Promise<AuthProviderInfo[]>
   authSession: () => Promise<AuthSessionPublic>
   authLogin: (request: AuthLoginRequest) => Promise<AuthSessionPublic>

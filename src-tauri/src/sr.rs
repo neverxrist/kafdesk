@@ -25,7 +25,7 @@ impl SchemaRegistryClient {
             .schema_registry_auth
             .as_ref()
             .map(|a| (a.username.clone(), a.password.clone()));
-        let client = build_http_client(config.schema_registry_tls.as_ref())?;
+        let client = build_http_client(crate::tls_resolve::schema_registry_tls(config))?;
         Ok(Self { host, client, basic })
     }
 

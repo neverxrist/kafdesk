@@ -23,7 +23,3 @@ export function applyMsgFontPx(px: number) {
   }
   return v
 }
-
-export function bumpMsgFontPx(delta: number) {
-  return applyMsgFontPx(loadMsgFontPx() + delta)
-}

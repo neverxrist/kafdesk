@@ -4,30 +4,27 @@ import type { useLocale } from '../hooks/useLocale'
 type Tr = ReturnType<typeof useLocale>['tr']
 
 export default function MsgFontControls({ tr }: { tr: Tr }) {
-  const { smaller, larger, canSmaller, canLarger } = useMsgFontScale()
+  const { msgFontPx, setMsgFontPx, min, max } = useMsgFontScale()
 
   return (
     <div className="msg-font-controls" role="group" aria-label={tr('msgFontSize')}>
-      <button
-        type="button"
-        className="msg-font-btn"
-        disabled={!canSmaller}
-        onClick={smaller}
-        title={tr('msgFontSmaller')}
-        aria-label={tr('msgFontSmaller')}
-      >
-        A−
-      </button>
-      <button
-        type="button"
-        className="msg-font-btn"
-        disabled={!canLarger}
-        onClick={larger}
-        title={tr('msgFontLarger')}
-        aria-label={tr('msgFontLarger')}
-      >
-        A+
-      </button>
+      <span className="msg-font-label" aria-hidden="true">
+        A
+      </span>
+      <input
+        type="range"
+        className="msg-font-range"
+        min={min}
+        max={max}
+        step={1}
+        value={msgFontPx}
+        onChange={(e) => setMsgFontPx(Number(e.target.value))}
+        aria-label={tr('msgFontSize')}
+        title={`${msgFontPx}px`}
+      />
+      <span className="msg-font-readout" aria-hidden="true">
+        {msgFontPx}px
+      </span>
     </div>
   )
 }

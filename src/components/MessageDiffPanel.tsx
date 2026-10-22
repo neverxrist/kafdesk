@@ -34,12 +34,15 @@ export default function MessageDiffPanel({
   right,
   onClear,
   onRemove,
+  embedded = false,
 }: {
   tr: Tr
   left: KafkaMessageView
   right: KafkaMessageView
   onClear: () => void
   onRemove: (m: KafkaMessageView) => void
+  /** Hide own header — dock toolbar already has Clear / title. */
+  embedded?: boolean
 }) {
   const schemaMismatch = schemasDiffer(left, right)
   const leftBody = useMemo(() => highlightMessageBody(messageBodyText(left)), [left])
@@ -48,13 +51,17 @@ export default function MessageDiffPanel({
   const rightKey = keyLabel(right)
 
   return (
-    <div className={`msg-diff panel${schemaMismatch ? ' msg-diff-schema-warn' : ''}`}>
-      <div className="msg-diff-head">
-        <h3>{tr('diffTitle')}</h3>
-        <button type="button" onClick={onClear}>
-          {tr('diffClear')}
-        </button>
-      </div>
+    <div
+      className={`msg-diff${embedded ? ' msg-diff-embedded' : ' panel'}${schemaMismatch ? ' msg-diff-schema-warn' : ''}`}
+    >
+      {!embedded && (
+        <div className="msg-diff-head">
+          <h3>{tr('diffTitle')}</h3>
+          <button type="button" onClick={onClear}>
+            {tr('diffClear')}
+          </button>
+        </div>
+      )}
       {schemaMismatch && (
         <div className="msg-diff-schema-banner" role="status">
           {tr('diffSchemaMismatch', {

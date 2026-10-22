@@ -176,6 +176,7 @@ impl KafkaSession {
         let filter = BrokerMessageFilter {
             search: request.search.clone(),
             search_key: request.search_key.clone(),
+            search_scope: None,
             header_key: request.search_header_key.clone(),
             header_value: request.search_header_value.clone(),
             time_from: request.time_from,
@@ -385,6 +386,7 @@ impl KafkaSession {
         let filter = BrokerMessageFilter {
             search: request.search.clone(),
             search_key: request.search_key.clone(),
+            search_scope: None,
             header_key: request.search_header_key.clone(),
             header_value: request.search_header_value.clone(),
             time_from: request.time_from,

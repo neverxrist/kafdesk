@@ -1,8 +1,8 @@
-pub const CONSUME_LIMIT_MAX: i32 = 500;
+pub const CONSUME_LIMIT_MAX: i32 = 1000;
 pub const PRODUCE_BATCH_MAX: usize = 2000;
 
 pub fn clamp_consume_limit(limit: Option<i32>) -> i32 {
-    let n = limit.unwrap_or(25);
+    let n = limit.unwrap_or(30);
     n.clamp(1, CONSUME_LIMIT_MAX)
 }
 

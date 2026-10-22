@@ -52,20 +52,33 @@ fn decode_payload(payload: Option<&[u8]>) -> (String, Value, String, Option<i32>
     };
     let schema_id = extract_confluent_schema_id(buf);
     let format = detect_format(buf, schema_id);
-    let raw_preview = to_raw_preview(buf, &format);
+    // Skip duplicating payload into raw_preview when `value` already holds it (RAM / IPC).
+    let raw_preview = match format.as_str() {
+        "json" | "string" => String::new(),
+        _ => to_raw_preview(buf, &format),
+    };
 
     let value = match format.as_str() {
         "avro" => {
             // Without SR at decode time, surface raw/wire hint; SR decode happens in session when registry configured.
+            let preview = if raw_preview.is_empty() {
+                to_raw_preview(buf, &format)
+            } else {
+                raw_preview.clone()
+            };
             Value::Object(
-                [("raw".into(), Value::String(raw_preview.clone()))]
+                [("raw".into(), Value::String(preview))]
                     .into_iter()
                     .collect(),
             )
         }
         "json" => parse_json_loose(std::str::from_utf8(buf).unwrap_or("")),
         "string" => Value::String(String::from_utf8_lossy(buf).into_owned()),
-        _ => Value::String(raw_preview.clone()),
+        _ => Value::String(if raw_preview.is_empty() {
+            to_raw_preview(buf, &format)
+        } else {
+            raw_preview.clone()
+        }),
     };
 
     (format, value, raw_preview, schema_id)
@@ -139,8 +152,9 @@ fn to_raw_preview(buf: &[u8], format: &str) -> String {
         }
     } else {
         let text = String::from_utf8_lossy(buf);
-        if text.len() > 2000 {
-            format!("{}…", &text[..2000])
+        // Short preview only (UI collapse / bytes); full body lives in `value`.
+        if text.len() > 400 {
+            format!("{}…", &text[..400])
         } else {
             text.into_owned()
         }

@@ -2,18 +2,41 @@ import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import type { KafkaMessageView } from '../types/kafdesk'
 import { formatBadgeLabel, formatMessageDateTime } from '../lib/format'
 import { highlightMessageBody } from '../lib/jsonHighlight'
-import { messageId } from '../lib/messageText'
+import { messageBodyText, messageId } from '../lib/messageText'
 import type { MessageViewMode } from '../lib/messageView'
 
 /** Collapsed preview ≈ 2 lines; shorter bodies stay fully open. */
 const PREVIEW_MAX_LINES = 2
 const PREVIEW_CHARS_PER_LINE = 96
+const PREVIEW_MAX_CHARS = 400
 
 function bodyNeedsCollapse(body: string): boolean {
   const lines = body.split('\n')
   if (lines.length > PREVIEW_MAX_LINES) return true
   const longest = lines.reduce((n, line) => Math.max(n, line.length), 0)
   return longest > PREVIEW_CHARS_PER_LINE * PREVIEW_MAX_LINES
+}
+
+/** Cheap sample for collapse heuristic — no pretty-print. */
+function collapseSample(m: KafkaMessageView): string {
+  if (typeof m.value === 'string') return m.value
+  if (m.rawPreview) return m.rawPreview
+  try {
+    return JSON.stringify(m.value)
+  } catch {
+    return String(m.value)
+  }
+}
+
+/** Plain truncated preview for collapsed Full cards (no highlight spans). */
+function truncatePreview(text: string): string {
+  const lines = text.split('\n')
+  const head = lines.slice(0, PREVIEW_MAX_LINES).join('\n')
+  const clipped =
+    head.length > PREVIEW_MAX_CHARS ? `${head.slice(0, PREVIEW_MAX_CHARS)}…` : head
+  const more = lines.length > PREVIEW_MAX_LINES || text.length > clipped.length
+  if (!more) return clipped
+  return clipped.endsWith('…') ? clipped : `${clipped}…`
 }
 
 function CopyIcon() {
@@ -88,18 +111,25 @@ export default function MessageCard({
   keyLabel = 'key',
   viewMode = 'full',
   selectedForDiff = false,
+  diffSlot,
   diffFull = false,
+  inspected = false,
   onToggleDiff,
   onRepublish,
+  onInspect,
   labels,
 }: {
   message: KafkaMessageView
   keyLabel?: string
   viewMode?: MessageViewMode
   selectedForDiff?: boolean
+  /** 1 = left / first pick, 2 = right / compare-with */
+  diffSlot?: 1 | 2
   diffFull?: boolean
+  inspected?: boolean
   onToggleDiff?: (m: KafkaMessageView) => void
   onRepublish?: (m: KafkaMessageView) => void
+  onInspect?: (m: KafkaMessageView) => void
   labels?: {
     republish: string
     diffSelect: string
@@ -109,25 +139,40 @@ export default function MessageCard({
     copyValue: string
     copied: string
     headers?: string
+    inspect?: string
   }
 }) {
   const headerEntries = Object.entries(m.headers || {})
   const when = formatMessageDateTime(m.timestamp)
   const id = messageId(m)
   const compact = viewMode === 'compact'
-  const body = useMemo(
-    () => (typeof m.value === 'string' ? m.value : JSON.stringify(m.value, null, 2)),
-    [m.value],
+
+  const needsCollapse = useMemo(
+    () => bodyNeedsCollapse(collapseSample(m)),
+    [m.value, m.rawPreview],
   )
-  const needsCollapse = useMemo(() => bodyNeedsCollapse(body), [body])
   /** Full: collapse only when taller than ~2 lines; Compact: hidden until open. */
   const [expanded, setExpanded] = useState(() => !compact && !needsCollapse)
   const [copied, setCopied] = useState(false)
-  const highlighted = useMemo(() => highlightMessageBody(body), [body])
   const toggleLabel = expanded
     ? labels?.collapse ?? 'Collapse'
     : labels?.expand ?? 'Expand'
   const showFullBody = compact ? expanded : expanded || !needsCollapse
+
+  // Pretty body + highlight only when the full body is on screen (RAM).
+  const fullBody = useMemo(
+    () => (showFullBody ? messageBodyText(m) : null),
+    [m.value, showFullBody],
+  )
+  const highlighted = useMemo(
+    () => (fullBody != null ? highlightMessageBody(fullBody) : null),
+    [fullBody],
+  )
+  // Collapsed Full preview: plain truncate from cheap sample (no token spans).
+  const previewPlain = useMemo(() => {
+    if (showFullBody || compact) return null
+    return truncatePreview(collapseSample(m))
+  }, [m.value, m.rawPreview, showFullBody, compact])
 
   useEffect(() => {
     setExpanded(!compact && !needsCollapse)
@@ -153,12 +198,13 @@ export default function MessageCard({
   function copyBody(e: MouseEvent) {
     e.stopPropagation()
     e.preventDefault()
+    const text = fullBody ?? messageBodyText(m)
     if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(body).catch(() => {
-        fallbackCopy(body)
+      void navigator.clipboard.writeText(text).catch(() => {
+        fallbackCopy(text)
       })
     } else {
-      fallbackCopy(body)
+      fallbackCopy(text)
     }
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1200)
@@ -215,10 +261,20 @@ export default function MessageCard({
     Boolean(labels) &&
     (Boolean(onRepublish && labels?.republish) ||
       Boolean(onToggleDiff && labels?.diffSelect) ||
+      Boolean(onInspect && labels?.inspect) ||
       (!compact && needsCollapse))
 
   const actionsBlock = showActions ? (
     <div className="msg-actions">
+      {onInspect && labels?.inspect && (
+        <button
+          type="button"
+          className={`msg-action${inspected ? ' active' : ''}`}
+          onClick={() => onInspect(m)}
+        >
+          {labels.inspect}
+        </button>
+      )}
       {onRepublish && labels?.republish && (
         <button type="button" className="msg-action" onClick={() => onRepublish(m)}>
           {labels.republish}
@@ -249,20 +305,36 @@ export default function MessageCard({
     </div>
   ) : null
 
+  const diffClass = diffSlot
+    ? ` msg-diff-selected msg-diff-slot-${diffSlot}`
+    : selectedForDiff
+      ? ' msg-diff-selected'
+      : ''
+
   if (compact) {
     return (
       <article
-        className={`msg msg-compact${expanded ? ' is-open' : ''}${selectedForDiff ? ' msg-diff-selected' : ''}`}
+        className={`msg msg-compact${expanded ? ' is-open' : ''}${diffClass}${inspected ? ' msg-inspected' : ''}`}
         data-msgid={id}
       >
         <button
           type="button"
           className="msg-compact-row"
           aria-expanded={expanded}
-          title={toggleLabel}
-          onClick={toggleExpanded}
+          title={labels?.inspect ?? toggleLabel}
+          onClick={() => {
+            if (onInspect) onInspect(m)
+            else toggleExpanded()
+          }}
         >
-          <span className="msg-compact-chevron" aria-hidden="true">
+          <span
+            className="msg-compact-chevron"
+            aria-hidden="true"
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded()
+            }}
+          >
             {expanded ? '▾' : '▸'}
           </span>
           {keyBlock}
@@ -294,10 +366,26 @@ export default function MessageCard({
 
   return (
     <article
-      className={`msg${expanded ? ' is-open' : ''}${selectedForDiff ? ' msg-diff-selected' : ''}`}
+      className={`msg${expanded ? ' is-open' : ''}${diffClass}${inspected ? ' msg-inspected' : ''}`}
       data-msgid={id}
     >
-      <div className="msg-head">
+      <div
+        className={`msg-head${onInspect ? ' msg-head-inspectable' : ''}`}
+        onClick={onInspect ? () => onInspect(m) : undefined}
+        onKeyDown={
+          onInspect
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onInspect(m)
+                }
+              }
+            : undefined
+        }
+        role={onInspect ? 'button' : undefined}
+        tabIndex={onInspect ? 0 : undefined}
+        title={onInspect && labels?.inspect ? labels.inspect : undefined}
+      >
         <span className="msg-meta">{keyBlock}</span>
         {metaRight}
       </div>
@@ -325,7 +413,7 @@ export default function MessageCard({
             title={toggleLabel}
             onClick={toggleExpanded}
           >
-            <pre className="msg-body">{highlighted}</pre>
+            <pre className="msg-body">{previewPlain}</pre>
           </button>
         )}
       </div>

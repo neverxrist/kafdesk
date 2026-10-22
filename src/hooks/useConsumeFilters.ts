@@ -6,8 +6,15 @@ import {
   type ConsumeFilterState,
 } from '../lib/consumeFilters'
 import { filterMessages } from '../lib/messageFilter'
+import type { SearchScope } from '../lib/searchScope'
+import { uiSearchFromStored } from '../lib/searchScope'
 
 export type { ConsumeFilterState }
+
+function normalizeFilter(f: ConsumeFilterState): ConsumeFilterState {
+  const { text, scope } = uiSearchFromStored(f.search, f.searchKey, f.searchScope)
+  return { ...f, search: text, searchKey: '', searchScope: scope }
+}
 
 /**
  * Client filter state + broker window controls for Consume.
@@ -17,6 +24,7 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
   const initial = defaultConsumeFilterState()
   const [search, setSearch] = useState(initial.search)
   const [searchKey, setSearchKey] = useState(initial.searchKey)
+  const [searchScope, setSearchScope] = useState<SearchScope>(initial.searchScope)
   const [headerKey, setHeaderKey] = useState(initial.headerKey)
   const [headerValue, setHeaderValue] = useState(initial.headerValue)
   const [timeFrom, setTimeFrom] = useState(initial.timeFrom)
@@ -30,6 +38,7 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
   const filterStateRef = useRef<ConsumeFilterState>({
     search,
     searchKey,
+    searchScope,
     headerKey,
     headerValue,
     partitionFilter,
@@ -42,6 +51,7 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
   filterStateRef.current = {
     search,
     searchKey,
+    searchScope,
     headerKey,
     headerValue,
     partitionFilter,
@@ -60,16 +70,17 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
       filterMessages(messages, {
         search,
         searchKey,
+        searchScope,
         headerKey,
         headerValue,
         timeFrom,
         timeTo,
       }),
-    [messages, search, searchKey, headerKey, headerValue, timeFrom, timeTo],
+    [messages, search, searchKey, searchScope, headerKey, headerValue, timeFrom, timeTo],
   )
 
   function currentFilterState(): ConsumeFilterState {
-    return { ...filterStateRef.current }
+    return normalizeFilter({ ...filterStateRef.current })
   }
 
   const cancelScheduledConsumeReload = useCallback(() => {
@@ -79,11 +90,17 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
     }
   }, [])
 
-  function applyFilterState(f: ConsumeFilterState) {
+  function applyFilterState(raw: ConsumeFilterState) {
     cancelScheduledConsumeReload()
+    const f = normalizeFilter({
+      ...defaultConsumeFilterState(),
+      ...raw,
+      searchScope: raw.searchScope ?? 'both',
+    })
     filterStateRef.current = f
     setSearch(f.search)
     setSearchKey(f.searchKey)
+    setSearchScope(f.searchScope)
     setHeaderKey(f.headerKey)
     setHeaderValue(f.headerValue)
     setPartitionFilter(f.partitionFilter)
@@ -99,7 +116,7 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
     cancelScheduledConsumeReload()
     const run = () => {
       filterReloadTimer.current = null
-      brokerReloadRef.current({ ...filterStateRef.current })
+      brokerReloadRef.current(normalizeFilter({ ...filterStateRef.current }))
     }
     if (delayMs <= 0) run()
     else filterReloadTimer.current = setTimeout(run, delayMs)
@@ -107,9 +124,14 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
 
   function setSearchFilter(v: string) {
     setSearch(v)
-    filterStateRef.current = { ...filterStateRef.current, search: v }
+    filterStateRef.current = { ...filterStateRef.current, search: v, searchKey: '' }
+  }
+  function setSearchScopeFilter(v: SearchScope) {
+    setSearchScope(v)
+    filterStateRef.current = { ...filterStateRef.current, searchScope: v }
   }
   function setSearchKeyFilter(v: string) {
+    // Legacy — prefer setSearchFilter + setSearchScopeFilter('key')
     setSearchKey(v)
     filterStateRef.current = { ...filterStateRef.current, searchKey: v }
   }
@@ -155,6 +177,7 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
   return {
     search,
     searchKey,
+    searchScope,
     headerKey,
     headerValue,
     timeFrom,
@@ -173,6 +196,7 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
     partitionsFor: partitionsForFilter,
     selectedPartitions: () => partitionsForFilter(partitionFilter),
     setSearchFilter,
+    setSearchScopeFilter,
     setSearchKeyFilter,
     setHeaderKeyFilter,
     setHeaderValueFilter,

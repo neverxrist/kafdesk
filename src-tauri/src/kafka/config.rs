@@ -43,6 +43,8 @@ pub(crate) fn build_client_config(config: &ClusterConfig) -> Result<ClientConfig
         cfg.set("security.protocol", "sasl_plaintext");
     } else if want_ssl {
         cfg.set("security.protocol", "ssl");
+    } else {
+        cfg.set("security.protocol", "plaintext");
     }
 
     if auth == "sasl" {
@@ -60,9 +62,9 @@ pub(crate) fn build_client_config(config: &ClusterConfig) -> Result<ClientConfig
         }
     }
 
-    // Vendored OpenSSL has no corp trust store — reuse TLS PEM paths for broker SSL when set.
+    // Vendored OpenSSL has no corp trust store — apply Kafka TLS PEMs when SSL is on.
     if want_ssl {
-        if let Some(ref tls) = config.schema_registry_tls {
+        if let Some(tls) = crate::tls_resolve::kafka_tls(config) {
             if let Some(ca) = tls.ca_path.as_deref().filter(|p| !p.is_empty()) {
                 cfg.set("ssl.ca.location", ca);
             }
@@ -85,6 +87,33 @@ pub(crate) fn build_client_config(config: &ClusterConfig) -> Result<ClientConfig
     }
 
     Ok(cfg)
+}
+
+/// Human label for logs (no secrets).
+pub(crate) fn security_protocol_label(config: &ClusterConfig) -> &'static str {
+    let mut auth = config.auth_mode.clone().unwrap_or_else(|| {
+        if config
+            .sasl
+            .as_ref()
+            .map(|s| !s.username.is_empty())
+            .unwrap_or(false)
+        {
+            "sasl".into()
+        } else {
+            "none".into()
+        }
+    });
+    if auth == "oauthbearer" {
+        auth = "none".into();
+    }
+    let want_ssl = config.ssl.unwrap_or(false);
+    let want_sasl = auth == "sasl";
+    match (want_ssl, want_sasl) {
+        (true, true) => "sasl_ssl",
+        (false, true) => "sasl_plaintext",
+        (true, false) => "ssl",
+        (false, false) => "plaintext",
+    }
 }
 
 fn brokers_include_ip(brokers: &[String]) -> bool {

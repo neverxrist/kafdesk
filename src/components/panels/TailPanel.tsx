@@ -2,8 +2,10 @@ import { useState } from 'react'
 import type { KafkaMessageView, TopicInfo } from '../../types/kafdesk'
 import EmptyState from '../EmptyState'
 import MessageCard from '../MessageCard'
+import MessageSearchFilter from '../MessageSearchFilter'
 import MsgFontControls from '../MsgFontControls'
 import type { useLocale } from '../../hooks/useLocale'
+import type { SearchScope } from '../../lib/searchScope'
 import {
   loadMessageViewMode,
   persistMessageViewMode,
@@ -18,8 +20,8 @@ export function TailToolbar({
   topicDetails,
   search,
   setSearch,
-  searchKey,
-  setSearchKey,
+  searchScope,
+  setSearchScope,
   partitionFilter,
   setPartitionFilter,
   tailing,
@@ -32,8 +34,8 @@ export function TailToolbar({
   topicDetails: TopicInfo | null
   search: string
   setSearch: (v: string) => void
-  searchKey: string
-  setSearchKey: (v: string) => void
+  searchScope: SearchScope
+  setSearchScope: (v: SearchScope) => void
   partitionFilter: string
   setPartitionFilter: (v: string) => void
   tailing: boolean
@@ -43,26 +45,15 @@ export function TailToolbar({
 }) {
   return (
     <div className="toolbar">
-      <div className="field">
-        <label>{tr('searchValue')}</label>
-        <input
-          value={search}
-          maxLength={255}
-          onChange={(e) => setSearch(e.target.value.slice(0, 255))}
-          placeholder={tr('substring')}
-          disabled={!selectedTopic}
-        />
-      </div>
-      <div className="field">
-        <label>{tr('searchKey')}</label>
-        <input
-          value={searchKey}
-          maxLength={255}
-          onChange={(e) => setSearchKey(e.target.value.slice(0, 255))}
-          placeholder={tr('keyContains')}
-          disabled={!selectedTopic}
-        />
-      </div>
+      <MessageSearchFilter
+        tr={tr}
+        id="tail-search"
+        value={search}
+        scope={searchScope}
+        onChange={setSearch}
+        onScopeChange={setSearchScope}
+        disabled={!selectedTopic}
+      />
       <div className="field" style={{ maxWidth: 120 }}>
         <label>{tr('partition')}</label>
         <select

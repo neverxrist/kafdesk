@@ -13,6 +13,15 @@ export function messageId(m: KafkaMessageView): string {
   return `${m.topic}:${m.partition}:${m.offset}`
 }
 
+/**
+ * Drop wire `rawPreview` once we already hold `value` in JS —
+ * avoids keeping a second copy of up to ~2KB per message in the WebView heap.
+ */
+export function slimMessageForUi(m: KafkaMessageView): KafkaMessageView {
+  if (!m.rawPreview) return m
+  return { ...m, rawPreview: '' }
+}
+
 /** Best-effort subject guess for Avro republish */
 export function guessAvroSubject(topic: string, subjects: string[]): string {
   const preferred = [`${topic}-value`, `${topic}-key`, topic]

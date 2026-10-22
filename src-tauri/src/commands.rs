@@ -1,4 +1,6 @@
 use crate::auth::AuthState;
+use crate::debug_log;
+use crate::kafka::config::security_protocol_label;
 use crate::kafka::KafkaSession;
 use crate::types::*;
 use crate::updates::UpdateState;
@@ -41,10 +43,53 @@ pub fn ping_shell() -> String {
 }
 
 #[tauri::command]
+pub fn set_backend_debug(app: AppHandle, enabled: bool) -> Result<OkMsg, String> {
+    if enabled {
+        debug_log::set_enabled(true);
+        debug_log::emit(&app, "info", "backend debug ON".into());
+    } else {
+        // Emit while still enabled so the OFF line appears in the Logs tab.
+        if debug_log::is_enabled() {
+            debug_log::emit(&app, "info", "backend debug OFF".into());
+        }
+        debug_log::set_enabled(false);
+    }
+    Ok(OkMsg { ok: true })
+}
+
+#[tauri::command]
+pub fn get_backend_debug() -> bool {
+    debug_log::is_enabled()
+}
+
+#[tauri::command]
 pub async fn kafka_connect(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     config: ClusterConfig,
 ) -> Result<ConnectResult, String> {
+    crate::debug_log!(
+        &app,
+        "info",
+        "connect → {} protocol={} tlsCa={}",
+        config.brokers.join(","),
+        security_protocol_label(&config),
+        {
+            // Only report CA when it is actually applied (SSL / SASL_SSL).
+            let ssl = config.ssl.unwrap_or(false);
+            let has_ca = crate::tls_resolve::kafka_tls(&config)
+                .and_then(|t| t.ca_path.as_deref())
+                .map(|p| !p.is_empty())
+                .unwrap_or(false);
+            if !ssl {
+                "unused"
+            } else if has_ca {
+                "set"
+            } else {
+                "none"
+            }
+        }
+    );
     // Take the slot first so a stuck enrich (detached) cannot block reconnect forever.
     let mut session = {
         let mut guard = state.kafka.lock().await;
@@ -63,11 +108,28 @@ pub async fn kafka_connect(
             session.disconnect().await;
         }
     }
+    match &result {
+        Ok(r) => crate::debug_log!(
+            &app,
+            "info",
+            "connect ok sr={}{}",
+            r.schema_registry,
+            r.schema_registry_error
+                .as_deref()
+                .map(|e| format!(" srErr={e}"))
+                .unwrap_or_default()
+        ),
+        Err(e) => crate::debug_log!(&app, "error", "connect failed: {e}"),
+    }
     result
 }
 
 #[tauri::command]
-pub async fn kafka_disconnect(state: State<'_, Arc<AppState>>) -> Result<OkMsg, String> {
+pub async fn kafka_disconnect(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<OkMsg, String> {
+    crate::debug_log!(&app, "info", "disconnect");
     // Swap out whatever is in the slot immediately — do not wait on a detached long op.
     let mut session = {
         let mut guard = state.kafka.lock().await;
@@ -89,13 +151,50 @@ pub async fn kafka_status(state: State<'_, Arc<AppState>>) -> Result<StatusMsg, 
 }
 
 #[tauri::command]
-pub async fn kafka_ping(state: State<'_, Arc<AppState>>) -> Result<PingResult, String> {
-    state.kafka.lock().await.ping().await
+pub async fn kafka_ping(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<PingResult, String> {
+    crate::debug_log!(&app, "info", "ping (live session)");
+    let result = state.kafka.lock().await.ping().await;
+    match &result {
+        Ok(p) => crate::debug_log!(
+            &app,
+            if p.kafka.ok { "info" } else { "warn" },
+            "ping → kafkaOk={} ms={:?} sr={} err={:?}",
+            p.kafka.ok,
+            p.kafka.ms,
+            p.schema_registry.status,
+            p.kafka.error
+        ),
+        Err(e) => crate::debug_log!(&app, "error", "ping failed: {e}"),
+    }
+    result
 }
 
 #[tauri::command]
-pub async fn kafka_probe(config: ClusterConfig) -> Result<PingResult, String> {
-    KafkaSession::probe(config).await
+pub async fn kafka_probe(app: AppHandle, config: ClusterConfig) -> Result<PingResult, String> {
+    crate::debug_log!(
+        &app,
+        "info",
+        "probe → {} protocol={}",
+        config.brokers.join(","),
+        security_protocol_label(&config)
+    );
+    let result = KafkaSession::probe(config).await;
+    match &result {
+        Ok(p) => crate::debug_log!(
+            &app,
+            if p.kafka.ok { "info" } else { "warn" },
+            "probe → kafkaOk={} ms={:?} sr={} err={:?}",
+            p.kafka.ok,
+            p.kafka.ms,
+            p.schema_registry.status,
+            p.kafka.error
+        ),
+        Err(e) => crate::debug_log!(&app, "error", "probe failed: {e}"),
+    }
+    result
 }
 
 /// Hot-path worker (topic offsets / list) — waits for a slot.
@@ -171,17 +270,31 @@ where
 
 #[tauri::command]
 pub async fn kafka_list_topics(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<TopicInfo>, String> {
-    with_session_worker(&state, |session| session.list_topics()).await
+    crate::debug_log!(&app, "info", "list_topics");
+    let result = with_session_worker(&state, |session| session.list_topics()).await;
+    match &result {
+        Ok(t) => crate::debug_log!(&app, "info", "list_topics → {} topics", t.len()),
+        Err(e) => crate::debug_log!(&app, "error", "list_topics failed: {e}"),
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn kafka_get_topic_offsets(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     topic: String,
 ) -> Result<TopicInfo, String> {
-    with_session_worker(&state, move |session| session.get_topic_offsets(&topic)).await
+    // Hot path (sidebar enrich) — log failures only, not every topic poll.
+    let topic_name = topic.clone();
+    let result = with_session_worker(&state, move |session| session.get_topic_offsets(&topic)).await;
+    if let Err(e) = &result {
+        crate::debug_log!(&app, "error", "topic_offsets {topic_name} failed: {e}");
+    }
+    result
 }
 
 /// Detach the live session for a long op so disconnect/ping are not blocked.
@@ -218,9 +331,18 @@ where
 
 #[tauri::command]
 pub async fn kafka_consume(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     request: ConsumeRequest,
 ) -> Result<Vec<KafkaMessageView>, String> {
+    crate::debug_log!(
+        &app,
+        "info",
+        "consume → topic={} limit={:?} start={:?}",
+        request.topic,
+        request.limit,
+        request.start_from
+    );
     let my_gen = state.consume_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let gen = Arc::clone(&state.consume_gen);
     let permit = state
@@ -231,6 +353,7 @@ pub async fn kafka_consume(
         .map_err(|_| "Kafka worker interrupted".to_string())?;
     // Drop if a newer consume already started while we waited for a hot slot.
     if gen.load(Ordering::SeqCst) != my_gen {
+        crate::debug_log!(&app, "info", "consume cancelled (newer request)");
         return Ok(vec![]);
     }
     let worker = {
@@ -238,45 +361,97 @@ pub async fn kafka_consume(
         guard.clone_for_worker()?
     };
     // No nested tokio Runtime per click — that alone burns FDs until EMFILE.
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         futures::executor::block_on(worker.consume_cancellable(request, gen, my_gen))
     })
     .await
-    .map_err(|e| format!("consume join: {e}"))?
+    .map_err(|e| format!("consume join: {e}"))?;
+    match &result {
+        Ok(msgs) => crate::debug_log!(&app, "info", "consume → {} messages", msgs.len()),
+        Err(e) => crate::debug_log!(&app, "error", "consume failed: {e}"),
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn kafka_produce(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     request: ProduceRequest,
 ) -> Result<ProduceResult, String> {
-    state.kafka.lock().await.produce(request).await
+    crate::debug_log!(
+        &app,
+        "info",
+        "produce → topic={} format={}",
+        request.topic,
+        request.format
+    );
+    let result = state.kafka.lock().await.produce(request).await;
+    match &result {
+        Ok(r) => crate::debug_log!(
+            &app,
+            "info",
+            "produce ok partition={} offset={:?}",
+            r.partition,
+            r.offset
+        ),
+        Err(e) => crate::debug_log!(&app, "error", "produce failed: {e}"),
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn kafka_produce_batch(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     request: ProduceBatchRequest,
 ) -> Result<ProduceBatchResult, String> {
-    with_session_detached(&state, |session| async move {
+    crate::debug_log!(
+        &app,
+        "info",
+        "produce_batch → topic={} count={}",
+        request.topic,
+        request.messages.len()
+    );
+    let result = with_session_detached(&state, |session| async move {
         let result = session.produce_batch(request).await;
         (session, result)
     })
-    .await
+    .await;
+    match &result {
+        Ok(r) => crate::debug_log!(&app, "info", "produce_batch → sent={}", r.sent),
+        Err(e) => crate::debug_log!(&app, "error", "produce_batch failed: {e}"),
+    }
+    result
 }
 
 #[tauri::command]
-pub async fn kafka_list_subjects(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
-    state.kafka.lock().await.list_subjects().await
+pub async fn kafka_list_subjects(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<String>, String> {
+    crate::debug_log!(&app, "info", "sr list_subjects");
+    let result = state.kafka.lock().await.list_subjects().await;
+    match &result {
+        Ok(s) => crate::debug_log!(&app, "info", "sr list_subjects → {}", s.len()),
+        Err(e) => crate::debug_log!(&app, "error", "sr list_subjects failed: {e}"),
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn kafka_get_latest_schema(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     subject: String,
 ) -> Result<SchemaSubjectInfo, String> {
-    state.kafka.lock().await.get_latest_schema(&subject).await
+    crate::debug_log!(&app, "info", "sr get_schema → {subject}");
+    let result = state.kafka.lock().await.get_latest_schema(&subject).await;
+    if let Err(e) = &result {
+        crate::debug_log!(&app, "error", "sr get_schema failed: {e}");
+    }
+    result
 }
 
 #[tauri::command]
@@ -350,13 +525,32 @@ pub async fn kafka_tail_start(
     state: State<'_, Arc<AppState>>,
     request: TailRequest,
 ) -> Result<OkMsg, String> {
-    state.kafka.lock().await.start_tail(app, request).await?;
+    crate::debug_log!(&app, "info", "tail start → {}", request.topic);
+    let result = state.kafka.lock().await.start_tail(app.clone(), request).await;
+    match &result {
+        Ok(()) => crate::debug_log!(&app, "info", "tail started"),
+        Err(e) => crate::debug_log!(&app, "error", "tail start failed: {e}"),
+    }
+    result?;
     Ok(OkMsg { ok: true })
 }
 
 #[tauri::command]
-pub async fn kafka_tail_stop(state: State<'_, Arc<AppState>>) -> Result<OkMsg, String> {
+pub async fn kafka_tail_stop(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<OkMsg, String> {
+    crate::debug_log!(&app, "info", "tail stop");
     state.kafka.lock().await.stop_tail().await;
+    Ok(OkMsg { ok: true })
+}
+
+#[tauri::command]
+pub async fn kafka_tail_set_filter(
+    state: State<'_, Arc<AppState>>,
+    request: TailRequest,
+) -> Result<OkMsg, String> {
+    state.kafka.lock().await.set_tail_filter(&request)?;
     Ok(OkMsg { ok: true })
 }
 

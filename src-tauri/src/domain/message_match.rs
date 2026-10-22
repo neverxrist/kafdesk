@@ -5,6 +5,8 @@ use std::collections::HashMap;
 pub struct BrokerMessageFilter {
     pub search: Option<String>,
     pub search_key: Option<String>,
+    /// "both" | "key" | "value" — default both for `search`.
+    pub search_scope: Option<String>,
     pub header_key: Option<String>,
     pub header_value: Option<String>,
     pub time_from: Option<i64>,
@@ -100,23 +102,29 @@ pub fn matches_decoded_message(view: &KafkaMessageView, f: &BrokerMessageFilter)
         .as_ref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
+    let scope = f
+        .search_scope
+        .as_deref()
+        .unwrap_or("both")
+        .to_ascii_lowercase();
 
     let key_text = view.key.clone().unwrap_or_default().to_lowercase();
-    let haystack = format!(
-        "{} {} {}",
-        view.key.as_deref().unwrap_or(""),
-        view.raw_preview,
-        view.value
-    )
-    .to_lowercase();
+    let value_hay = format!("{} {}", view.raw_preview, view.value).to_lowercase();
+    let both_hay = format!("{key_text} {value_hay}");
 
+    // Explicit key needle (legacy AND / scope=key wire).
     if let Some(ref sk) = search_key {
         if !key_text.contains(sk) {
             return false;
         }
     }
     if let Some(ref s) = search {
-        if !haystack.contains(s) {
+        let ok = match scope.as_str() {
+            "value" => value_hay.contains(s),
+            "key" => key_text.contains(s),
+            _ => both_hay.contains(s),
+        };
+        if !ok {
             return false;
         }
     }

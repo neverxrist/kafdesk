@@ -40,7 +40,9 @@ import {
   rowsFromHeaders,
   type ProduceHeaderRow,
 } from '../lib/produceHeaders'
-import { guessAvroSubject, messageBodyText, messageId } from '../lib/messageText'
+import { guessAvroSubject, messageBodyText, messageId, slimMessageForUi } from '../lib/messageText'
+import { filterMessages } from '../lib/messageFilter'
+import { wireSearch } from '../lib/searchScope'
 import { stripIpcError } from '../lib/ipcError'
 import {
   brokersFromHostPort,
@@ -97,6 +99,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const {
     search,
     searchKey,
+    searchScope,
     headerKey,
     headerValue,
     timeFrom,
@@ -114,7 +117,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     partitionsFor: partitionsForFilter,
     selectedPartitions,
     setSearchFilter,
-    setSearchKeyFilter,
+    setSearchScopeFilter,
     setHeaderKeyFilter,
     setHeaderValueFilter,
     setTimeFromFilter,
@@ -224,7 +227,12 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     void window.kafdesk.updateSettings?.().then((s) => setUpdateAuto(s.autoUpdate))
     void refreshStoredCreds()
     const offTail = window.kafdesk.onTailMessage((msg) => {
-      setTailMessages((prev) => [msg, ...prev].slice(0, 200))
+      const slim = slimMessageForUi(msg)
+      const id = messageId(slim)
+      setTailMessages((prev) => {
+        if (prev.some((m) => messageId(m) === id)) return prev
+        return [slim, ...prev].slice(0, 100)
+      })
     })
     const offTailErr = window.kafdesk.onTailError?.((message) => {
       setTailing(false)
@@ -826,26 +834,28 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         : await window.kafdesk.probe(next)
 
       const kafkaPart = res.kafka.ok
-        ? `Kafka ${res.kafka.ms ?? '?'}ms`
+        ? `Kafka OK ${res.kafka.ms ?? '?'}ms`
         : `Kafka fail: ${res.kafka.error ?? 'error'}`
       const srPart =
         res.schemaRegistry.status === 'none'
-          ? 'no SR'
+          ? 'SR —'
           : res.schemaRegistry.status === 'ok'
-            ? `SR ${res.schemaRegistry.ms ?? '?'}ms`
+            ? `SR OK ${res.schemaRegistry.ms ?? '?'}ms`
             : `SR fail: ${res.schemaRegistry.error ?? 'error'}`
+      const dnsPart = res.dnsWarning ? `DNS: ${res.dnsWarning}` : 'DNS OK'
+      const summary = `${kafkaPart} · ${srPart} · ${dnsPart}`
 
       if (wasConnected) {
-        setPingInfo(`${kafkaPart} · ${srPart}`)
+        setPingInfo(summary)
         setSrStatus(res.schemaRegistry.status)
         if (!res.kafka.ok) {
           await abandonConnection()
         }
       } else if (res.kafka.ok) {
         // Probe only — does not leave a live session. Point at Connect explicitly.
-        setPingInfo(`Reachable · ${kafkaPart} · ${srPart} — press Connect`)
+        setPingInfo(`${summary} — press Connect`)
       } else {
-        setPingInfo(`unreachable · ${kafkaPart} · ${srPart}`)
+        setPingInfo(summary)
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -977,6 +987,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   function changeTab(next: typeof tab) {
     const prev = tabRef.current
     setTab(next)
+    // Drop heavy message window when leaving Consume — WebView keeps DOM/JS otherwise.
+    if (prev === 'consume' && next !== 'consume') {
+      setMessages([])
+      clearDiff()
+    }
     if (
       next === 'consume' &&
       prev !== 'consume' &&
@@ -1018,6 +1033,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     const f: ConsumeFilterState = {
       search: q.search,
       searchKey: q.searchKey,
+      searchScope: q.searchScope ?? 'both',
       headerKey: q.headerKey,
       headerValue: q.headerValue,
       partitionFilter: q.partitionFilter,
@@ -1106,7 +1122,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       ])
       // Ignore stale responses if a newer filter/topic request already started
       if (selectedTopicRef.current === topic && consumeGenRef.current === gen) {
-        setMessages(rows)
+        setMessages(rows.map(slimMessageForUi))
       }
     } catch (err) {
       if (consumeGenRef.current === gen) {
@@ -1278,20 +1294,26 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     }
   }
 
+  function buildTailRequest(topic: string) {
+    const wired = wireSearch(search, searchScope)
+    return {
+      topic,
+      partitions: selectedPartitions(),
+      search: wired.search,
+      searchKey: wired.searchKey,
+      searchScope: wired.searchScope,
+      searchHeaderKey: headerKey || undefined,
+      searchHeaderValue: headerValue || undefined,
+    }
+  }
+
   async function startTail() {
     if (!selectedTopic) return
     setBusy(true)
     setError(null)
     try {
       setTailMessages([])
-      await window.kafdesk.tailStart({
-        topic: selectedTopic,
-        partitions: selectedPartitions(),
-        search: search || undefined,
-        searchKey: searchKey || undefined,
-        searchHeaderKey: headerKey || undefined,
-        searchHeaderValue: headerValue || undefined,
-      })
+      await window.kafdesk.tailStart(buildTailRequest(selectedTopic))
       setTailing(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -1299,6 +1321,25 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setBusy(false)
     }
   }
+
+  // Hot-swap Rust filters while running + prune already-buffered rows to match.
+  useEffect(() => {
+    if (!tailing || !selectedTopic || !window.kafdesk?.tailSetFilter) return
+    const t = window.setTimeout(() => {
+      void window.kafdesk.tailSetFilter(buildTailRequest(selectedTopic)).catch(() => {})
+      setTailMessages((prev) =>
+        filterMessages(prev, {
+          search,
+          searchKey,
+          searchScope,
+          headerKey,
+          headerValue,
+        }),
+      )
+    }, 250)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to filter fields while tailing
+  }, [tailing, selectedTopic, search, searchScope, headerKey, headerValue, partitionFilter])
 
   async function stopTail() {
     setBusy(true)
@@ -1483,8 +1524,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     loadingMessages,
     search,
     setSearch: setSearchFilter,
-    searchKey,
-    setSearchKey: setSearchKeyFilter,
+    searchScope,
+    setSearchScope: setSearchScopeFilter,
     headerKey,
     setHeaderKey: setHeaderKeyFilter,
     headerValue,
@@ -1506,7 +1547,13 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     partitionFilter,
     setPartitionFilter: setPartitionFilterUI,
     tailing,
-    tailMessages,
+    tailMessages: filterMessages(tailMessages, {
+      search,
+      searchKey,
+      searchScope,
+      headerKey,
+      headerValue,
+    }),
     hasRegistry,
     produceFormat,
     setProduceFormat,

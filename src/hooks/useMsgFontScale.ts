@@ -8,19 +8,14 @@ export function useMsgFontScale() {
     applyMsgFontPx(px)
   }, [px])
 
-  function smaller() {
-    setPx((prev) => applyMsgFontPx(prev - 1))
-  }
-
-  function larger() {
-    setPx((prev) => applyMsgFontPx(prev + 1))
+  function setMsgFontPx(n: number) {
+    setPx(applyMsgFontPx(n))
   }
 
   return {
     msgFontPx: px,
-    smaller,
-    larger,
-    canSmaller: px > MSG_FONT_MIN,
-    canLarger: px < MSG_FONT_MAX,
+    setMsgFontPx,
+    min: MSG_FONT_MIN,
+    max: MSG_FONT_MAX,
   }
 }

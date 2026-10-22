@@ -3,11 +3,12 @@ import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../types/
 import EmptyState from '../EmptyState'
 import MessageCard from '../MessageCard'
 import MessageDiffPanel from '../MessageDiffPanel'
+import MessageInspectorDock from '../MessageInspectorDock'
 import MsgFontControls from '../MsgFontControls'
+import VirtualList from '../VirtualList'
 import type { useLocale } from '../../hooks/useLocale'
 import type { SavedConsumeQuery } from '../../lib/savedQueries'
 import { RefreshIcon } from '../ConnActionIcons'
-import TopicSchemaPanel from '../TopicSchemaPanel'
 import { messageId } from '../../lib/messageText'
 import {
   loadBatchTimeSort,
@@ -19,6 +20,8 @@ import {
   type BatchTimeSort,
   type MessageViewMode,
 } from '../../lib/messageView'
+import MessageSearchFilter from '../MessageSearchFilter'
+import type { SearchScope } from '../../lib/searchScope'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -30,8 +33,8 @@ export function ConsumeToolbar({
   topicDetails,
   search,
   setSearch,
-  searchKey,
-  setSearchKey,
+  searchScope,
+  setSearchScope,
   headerKey,
   setHeaderKey,
   headerValue,
@@ -60,8 +63,8 @@ export function ConsumeToolbar({
   topicDetails: TopicInfo | null
   search: string
   setSearch: (v: string) => void
-  searchKey: string
-  setSearchKey: (v: string) => void
+  searchScope: SearchScope
+  setSearchScope: (v: SearchScope) => void
   headerKey: string
   setHeaderKey: (v: string) => void
   headerValue: string
@@ -105,7 +108,7 @@ export function ConsumeToolbar({
   function commitLimit(raw: string) {
     const n = Number(raw)
     if (!Number.isFinite(n)) return
-    const clamped = Math.min(500, Math.max(1, Math.trunc(n)))
+    const clamped = Math.min(1000, Math.max(1, Math.trunc(n)))
     setLimit(clamped)
     setLimitText(String(clamped))
   }
@@ -116,28 +119,16 @@ export function ConsumeToolbar({
         <div className="toolbar-zone toolbar-zone-filter">
           <span className="toolbar-zone-label">{tr('filterTag')}</span>
           <div className="toolbar-zone-fields">
-            <div className="field toolbar-filter-field">
-              <label htmlFor="consume-search-value">{tr('searchValue')}</label>
-              <input
-                id="consume-search-value"
-                value={search}
-                maxLength={FILTER_MAX}
-                onChange={(e) => setSearch(e.target.value.slice(0, FILTER_MAX))}
-                placeholder={tr('substring')}
-                disabled={!selectedTopic}
-              />
-            </div>
-            <div className="field toolbar-filter-field">
-              <label htmlFor="consume-search-key">{tr('searchKey')}</label>
-              <input
-                id="consume-search-key"
-                value={searchKey}
-                maxLength={FILTER_MAX}
-                onChange={(e) => setSearchKey(e.target.value.slice(0, FILTER_MAX))}
-                placeholder={tr('keyContains')}
-                disabled={!selectedTopic}
-              />
-            </div>
+            <MessageSearchFilter
+              tr={tr}
+              id="consume-search"
+              value={search}
+              scope={searchScope}
+              onChange={setSearch}
+              onScopeChange={setSearchScope}
+              disabled={!selectedTopic}
+              maxLength={FILTER_MAX}
+            />
           </div>
         </div>
 
@@ -191,13 +182,13 @@ export function ConsumeToolbar({
                 id="consume-limit"
                 type="number"
                 min={1}
-                max={500}
+                max={1000}
                 value={limitText}
                 onChange={(e) => {
                   setLimitText(e.target.value)
                   const n = Number(e.target.value)
                   if (Number.isFinite(n) && e.target.value.trim() !== '') {
-                    setLimit(Math.min(500, Math.max(1, Math.trunc(n))))
+                    setLimit(Math.min(1000, Math.max(1, Math.trunc(n))))
                   }
                 }}
                 onBlur={(e) => {
@@ -421,8 +412,6 @@ export default function ConsumePanel({
   messages,
   windowMessageCount = 0,
   selectedTopic,
-  subjects,
-  hasRegistry,
   busy,
   startFrom = 'end',
   diffMessages,
@@ -439,8 +428,6 @@ export default function ConsumePanel({
   /** Raw broker window size (before search/key/headers/time) */
   windowMessageCount?: number
   selectedTopic: string | null
-  subjects: string[]
-  hasRegistry: boolean
   busy?: boolean
   startFrom?: ConsumeStartFrom
   diffMessages: KafkaMessageView[]
@@ -455,11 +442,27 @@ export default function ConsumePanel({
   const [timeSort, setTimeSort] = useState<BatchTimeSort>(
     () => loadBatchTimeSort() ?? (startFrom === 'end' ? 'newest' : 'oldest'),
   )
+  const [dockOpen, setDockOpen] = useState(false)
+  const [inspectId, setInspectId] = useState<string | null>(null)
+  const [dockShowDiff, setDockShowDiff] = useState(() => {
+    try {
+      return localStorage.getItem('kafdesk.msgDockDiff') === '1'
+    } catch {
+      return false
+    }
+  })
   const newestFirst = timeSort === 'newest'
 
   function setView(mode: MessageViewMode) {
     setViewMode(mode)
     persistMessageViewMode(mode)
+    // Bottom inspector is for compact / Offset Explorer style — hide in full.
+    // Also clear comparison so it does not reappear as the inline diff panel.
+    if (mode === 'full') {
+      setDockOpen(false)
+      setDockDiff(false)
+      if (diffMessages.length > 0) onClearDiff()
+    }
   }
 
   function setGroupBy(on: boolean) {
@@ -496,6 +499,8 @@ export default function ConsumePanel({
 
   useEffect(() => {
     setHiddenPartitions(new Set())
+    setDockOpen(false)
+    setInspectId(null)
   }, [selectedTopic])
 
   // When Seek/Batch direction changes, reset list order to match (flip still local).
@@ -505,6 +510,63 @@ export default function ConsumePanel({
     prevStartFrom.current = startFrom
     setBatchSort(startFrom === 'end' ? 'newest' : 'oldest')
   }, [startFrom])
+
+  useEffect(() => {
+    if (!inspectId) return
+    if (!flatMessages.some((m) => messageId(m) === inspectId)) {
+      setInspectId(flatMessages[0] ? messageId(flatMessages[0]) : null)
+      if (flatMessages.length === 0) setDockOpen(false)
+    }
+  }, [flatMessages, inspectId])
+
+  useEffect(() => {
+    if (dockShowDiff && diffMessages.length === 2) setDockOpen(true)
+  }, [dockShowDiff, diffMessages.length])
+
+  const prevDiffLen = useRef(diffMessages.length)
+  useEffect(() => {
+    // Leaving diff mode (Clear / last selection removed) → drop the checkbox.
+    if (prevDiffLen.current > 0 && diffMessages.length === 0 && dockShowDiff) {
+      setDockDiff(false)
+    }
+    prevDiffLen.current = diffMessages.length
+  }, [diffMessages.length, dockShowDiff])
+
+  function openInspect(m: KafkaMessageView) {
+    if (dockShowDiff) {
+      // Diff-in-panel: click messages to pick them (same toggle as Diff button).
+      onToggleDiff(m)
+      if (viewMode === 'full') return
+      setInspectId(messageId(m))
+      setDockOpen(true)
+      return
+    }
+    if (viewMode === 'full') return
+    const id = messageId(m)
+    if (dockOpen && inspectId === id) {
+      setDockOpen(false)
+      setInspectId(null)
+      return
+    }
+    setInspectId(id)
+    setDockOpen(true)
+  }
+
+  function setDockDiff(on: boolean) {
+    setDockShowDiff(on)
+    try {
+      localStorage.setItem('kafdesk.msgDockDiff', on ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+    if (!on) return
+    if (viewMode !== 'full') setDockOpen(true)
+    // Already viewing a message → treat it as the first diff pick.
+    if (diffMessages.length === 0 && inspectId) {
+      const current = flatMessages.find((m) => messageId(m) === inspectId)
+      if (current) onToggleDiff(current)
+    }
+  }
 
   function togglePartition(id: number) {
     setHiddenPartitions((prev) => {
@@ -516,16 +578,23 @@ export default function ConsumePanel({
   }
 
   function renderCard(m: KafkaMessageView) {
+    const id = messageId(m)
+    const canInspect = viewMode === 'compact' || dockShowDiff
+    const di = diffMessages.findIndex((x) => messageId(x) === id)
+    const diffSlot = di === 0 ? 1 : di === 1 ? 2 : undefined
     return (
       <MessageCard
         key={`${m.partition}-${m.offset}`}
         message={m}
         keyLabel={tr('msgKey')}
         viewMode={viewMode}
-        selectedForDiff={diffIds.has(messageId(m))}
+        selectedForDiff={diffIds.has(id)}
+        diffSlot={diffSlot}
         diffFull={diffFull}
-        onToggleDiff={onToggleDiff}
+        inspected={dockOpen && inspectId === id}
+        onToggleDiff={dockShowDiff ? undefined : onToggleDiff}
         onRepublish={onRepublish}
+        onInspect={canInspect ? openInspect : undefined}
         labels={{
           republish: tr('republish'),
           diffSelect: tr('diffSelect'),
@@ -535,28 +604,26 @@ export default function ConsumePanel({
           copyValue: tr('copyValue'),
           copied: tr('copied'),
           headers: tr('msgHeaders'),
+          inspect: tr('msgDockOpen'),
         }}
       />
     )
   }
 
+  // Compact: diff only in the bottom dock. Full: classic inline panel.
+  const showInlineDiff = viewMode === 'full'
+  // Virt only in Compact — Full cards vary a lot in height; absolute windowing overlapped text.
+  const useVirt = viewMode === 'compact' && !groupByPartitions
+
   return (
-    <section className="messages drag-scroll">
+    <section className={`messages${dockOpen ? ' messages-with-dock' : ''}`}>
       {topicDetails && (
         <div className="panel messages-topic-panel">
           <div className="messages-panel-head">
-            <div className="topic-head-text">
-              <div className="topic-title-row">
-                <h2>
-                  {topicDetails.name}
-                  {topicDetails.approxMessages != null && (
-                    <span className="topic-meta">
-                      {' '}
-                      · {tr('msgsApprox', { n: topicDetails.approxMessages })}
-                    </span>
-                  )}
-                </h2>
-                <div className="partitions">
+            <div className="messages-panel-toolbar">
+              <div className="topic-toolbar-main">
+                <h2 title={topicDetails.name}>{topicDetails.name}</h2>
+                <div className="partitions" aria-label={tr('partitionsCount', { n: topicDetails.partitions.length })}>
                   {topicDetails.partitions.map((p) => {
                     const hidden = hiddenPartitions.has(p.partitionId)
                     const offsets = tr('partitionOffsets', {
@@ -577,84 +644,75 @@ export default function ConsumePanel({
                         onClick={() => togglePartition(p.partitionId)}
                       >
                         <strong>p{p.partitionId}</strong>
-                        <span className="partition-msgs">
-                          ≈{p.approxMessages ?? '?'}
-                        </span>
-                        <span className="partition-offsets">{offsets}</span>
+                        <span className="partition-msgs">≈{p.approxMessages ?? '?'}</span>
                       </button>
                     )
                   })}
                 </div>
-              </div>
-              <div className="topic-lag-row" title={tr('topicConsumersLabel')}>
-                <span className="topic-lag-label">{tr('topicConsumersLabel')}</span>
-                {topicGroupLags == null ? (
-                  <span className="topic-lag-empty">{tr('topicLagLoading')}</span>
-                ) : topicGroupLags.length === 0 ? (
-                  <span className="topic-lag-empty">{tr('topicLagNone')}</span>
-                ) : (
-                  topicGroupLags.map((g) => (
-                    <button
-                      key={g.groupId}
-                      type="button"
-                      className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
-                      title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
-                      onClick={() => onOpenConsumerGroup?.(g.groupId)}
-                    >
-                      <em>{g.groupId}</em>
-                      <strong>{g.totalLag}</strong>
-                    </button>
-                  ))
+                {(topicGroupLags == null || topicGroupLags.length > 0) && (
+                  <div className="topic-lag-row" title={tr('topicConsumersLabel')}>
+                    <span className="topic-lag-label">{tr('topicConsumersLabel')}</span>
+                    {topicGroupLags == null ? (
+                      <span className="topic-lag-empty">{tr('topicLagLoading')}</span>
+                    ) : (
+                      topicGroupLags.map((g) => (
+                        <button
+                          key={g.groupId}
+                          type="button"
+                          className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
+                          title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
+                          onClick={() => onOpenConsumerGroup?.(g.groupId)}
+                        >
+                          <em>{g.groupId}</em>
+                          <strong>{g.totalLag}</strong>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 )}
               </div>
-              <TopicSchemaPanel
-                tr={tr}
-                topic={selectedTopic}
-                subjects={subjects}
-                hasRegistry={hasRegistry}
-              />
-            </div>
-            <div className="messages-panel-controls">
-              <label className="message-group-opt">
-                <input
-                  type="checkbox"
-                  checked={groupByPartitions}
-                  onChange={(e) => setGroupBy(e.target.checked)}
-                />
-                {tr('groupByPartitions')}
-              </label>
-              <button
-                type="button"
-                className="batch-sort-btn"
-                onClick={toggleBatchSort}
-                title={newestFirst ? tr('batchSortNewest') : tr('batchSortOldest')}
-                aria-label={newestFirst ? tr('batchSortNewest') : tr('batchSortOldest')}
-              >
-                <BatchSortIcon newestFirst={newestFirst} />
-              </button>
-              <MsgFontControls tr={tr} />
-              <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
+              <div className="messages-panel-controls">
+                <label className="message-group-opt">
+                  <input
+                    type="checkbox"
+                    checked={groupByPartitions}
+                    onChange={(e) => setGroupBy(e.target.checked)}
+                  />
+                  {tr('groupByPartitions')}
+                </label>
                 <button
                   type="button"
-                  className={viewMode === 'full' ? 'active' : undefined}
-                  onClick={() => setView('full')}
+                  className="batch-sort-btn"
+                  onClick={toggleBatchSort}
+                  title={newestFirst ? tr('batchSortNewest') : tr('batchSortOldest')}
+                  aria-label={newestFirst ? tr('batchSortNewest') : tr('batchSortOldest')}
                 >
-                  {tr('viewFull')}
+                  <BatchSortIcon newestFirst={newestFirst} />
                 </button>
-                <button
-                  type="button"
-                  className={viewMode === 'compact' ? 'active' : undefined}
-                  onClick={() => setView('compact')}
-                >
-                  {tr('viewCompact')}
-                </button>
+                <MsgFontControls tr={tr} />
+                <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
+                  <button
+                    type="button"
+                    className={viewMode === 'full' ? 'active' : undefined}
+                    onClick={() => setView('full')}
+                  >
+                    {tr('viewFull')}
+                  </button>
+                  <button
+                    type="button"
+                    className={viewMode === 'compact' ? 'active' : undefined}
+                    onClick={() => setView('compact')}
+                  >
+                    {tr('viewCompact')}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {diffMessages.length === 2 && (
+      {showInlineDiff && diffMessages.length === 2 && (
         <MessageDiffPanel
           tr={tr}
           left={diffMessages[0]}
@@ -663,7 +721,7 @@ export default function ConsumePanel({
           onRemove={onToggleDiff}
         />
       )}
-      {diffMessages.length === 1 && (
+      {showInlineDiff && diffMessages.length === 1 && (
         <div className="msg-diff-hint panel">
           <span>{tr('diffPickSecond')}</span>
           <button type="button" onClick={() => onToggleDiff(diffMessages[0])}>
@@ -672,32 +730,67 @@ export default function ConsumePanel({
         </div>
       )}
 
-      {messages.length === 0 && (
-        <EmptyState
-          kind="events"
-          title={tr('emptyEventsTitle')}
-          hint={
-            !selectedTopic
-              ? tr('emptyEventsHint')
-              : busy
-                ? tr('loadingMessages')
-                : windowMessageCount > 0
-                  ? tr('noMessagesFilter')
-                  : tr('noMessagesWindow')
-          }
-        />
+      {messages.length === 0 ? (
+        <div className="messages-scroll drag-scroll">
+          <EmptyState
+            kind="events"
+            title={tr('emptyEventsTitle')}
+            hint={
+              !selectedTopic
+                ? tr('emptyEventsHint')
+                : busy
+                  ? tr('loadingMessages')
+                  : windowMessageCount > 0
+                    ? tr('noMessagesFilter')
+                    : tr('noMessagesWindow')
+            }
+          />
+        </div>
+      ) : useVirt ? (
+        <VirtualList
+          items={flatMessages}
+          estimateSize={48}
+          gap={6}
+          getKey={(m) => messageId(m)}
+          className="messages-virt"
+        >
+          {(m) => renderCard(m)}
+        </VirtualList>
+      ) : (
+        <div className="messages-scroll drag-scroll">
+          {groupByPartitions
+            ? visiblePartitions.map(({ partition, messages: partMsgs }) => (
+                <div key={partition} className="partition-group">
+                  <div className="partition-group-head">
+                    {tr('loadedInPartition', { id: partition, n: partMsgs.length })}
+                  </div>
+                  {partMsgs.map(renderCard)}
+                </div>
+              ))
+            : flatMessages.map(renderCard)}
+        </div>
       )}
 
-      {groupByPartitions
-        ? visiblePartitions.map(({ partition, messages: partMsgs }) => (
-            <div key={partition} className="partition-group">
-              <div className="partition-group-head">
-                {tr('loadedInPartition', { id: partition, n: partMsgs.length })}
-              </div>
-              {partMsgs.map(renderCard)}
-            </div>
-          ))
-        : flatMessages.map(renderCard)}
+      {dockOpen && (
+        <MessageInspectorDock
+          tr={tr}
+          messages={flatMessages}
+          activeId={inspectId}
+          showDiff={dockShowDiff}
+          onShowDiffChange={setDockDiff}
+          diffMessages={diffMessages}
+          onToggleDiff={onToggleDiff}
+          onClearDiff={onClearDiff}
+          onSelect={setInspectId}
+          onClose={() => {
+            setDockOpen(false)
+            // Closing the dock dismisses comparison — Full must not reopen it inline.
+            if (diffMessages.length > 0) onClearDiff()
+            setDockDiff(false)
+          }}
+          onRepublish={onRepublish}
+        />
+      )}
     </section>
   )
 }

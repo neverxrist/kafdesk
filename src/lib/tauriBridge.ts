@@ -13,6 +13,29 @@ import type {
   KafkaMessageView,
 } from '../types/kafdesk'
 
+/**
+ * React StrictMode mounts → cleans up → remounts before `listen()` resolves.
+ * If cleanup runs while `un` is still undefined, the first listener leaks and
+ * every event fires twice (classic live-tail duplicate). Cancel after resolve.
+ */
+function listenSafe<T>(event: string, cb: (payload: T) => void): () => void {
+  let alive = true
+  let un: UnlistenFn | undefined
+  void listen<T>(event, (e) => {
+    if (alive) cb(e.payload)
+  }).then((u) => {
+    if (!alive) {
+      u()
+      return
+    }
+    un = u
+  })
+  return () => {
+    alive = false
+    un?.()
+  }
+}
+
 /** Install window.kafdesk backed by Tauri invoke/listen (same surface as Electron preload). */
 export function installTauriKafdesk(): void {
   const api: KafDeskApi = {
@@ -40,24 +63,19 @@ export function installTauriKafdesk(): void {
       invoke('kafka_reset_group_offsets', { groupId, topic, earliest }),
     tailStart: (request: TailRequest) => invoke('kafka_tail_start', { request }),
     tailStop: () => invoke('kafka_tail_stop'),
-    onTailMessage: (cb: (msg: KafkaMessageView) => void) => {
-      let un: UnlistenFn | undefined
-      void listen<KafkaMessageView>('kafka://tail-message', (e) => cb(e.payload)).then((u) => {
-        un = u
-      })
-      return () => {
-        un?.()
-      }
-    },
-    onTailError: (cb: (message: string) => void) => {
-      let un: UnlistenFn | undefined
-      void listen<string>('kafka://tail-error', (e) => cb(e.payload)).then((u) => {
-        un = u
-      })
-      return () => {
-        un?.()
-      }
-    },
+    tailSetFilter: (request: TailRequest) => invoke('kafka_tail_set_filter', { request }),
+    onTailMessage: (cb: (msg: KafkaMessageView) => void) =>
+      listenSafe<KafkaMessageView>('kafka://tail-message', cb),
+    onTailError: (cb: (message: string) => void) =>
+      listenSafe<string>('kafka://tail-error', cb),
+    setBackendDebug: (enabled: boolean) => invoke('set_backend_debug', { enabled }),
+    getBackendDebug: () => invoke('get_backend_debug'),
+    onBackendDebugLog: (cb: (level: 'info' | 'warn' | 'error', msg: string) => void) =>
+      listenSafe<{ level?: string; msg?: string }>('kafka://debug-log', (payload) => {
+        const level =
+          payload.level === 'warn' || payload.level === 'error' ? payload.level : 'info'
+        cb(level, payload.msg ?? '')
+      }),
     listAuthProviders: () => invoke('auth_list_providers'),
     authSession: () => invoke('auth_session'),
     authLogin: (request: AuthLoginRequest) => invoke('auth_login', { request }),
@@ -71,15 +89,8 @@ export function installTauriKafdesk(): void {
     openDownloadedUpdate: () => invoke('app_open_downloaded_update'),
     openReleases: () => invoke('app_open_releases'),
     getVersion: () => invoke('app_get_version'),
-    onUpdateStatus: (cb: (s: UpdateStatus) => void) => {
-      let un: UnlistenFn | undefined
-      void listen<UpdateStatus>('app://update-status', (e) => cb(e.payload)).then((u) => {
-        un = u
-      })
-      return () => {
-        un?.()
-      }
-    },
+    onUpdateStatus: (cb: (s: UpdateStatus) => void) =>
+      listenSafe<UpdateStatus>('app://update-status', cb),
   }
 
   ;(window as Window & { kafdesk: KafDeskApi }).kafdesk = api

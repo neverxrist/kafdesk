@@ -1,6 +1,6 @@
 [package]
 name = "kafdesk"
-version = "1.0.0"
+version = "1.0.2"
 description = "KafDesk — lightweight Kafka desktop client (Tauri)"
 authors = ["KafDesk contributors"]
 license = "MIT"
@@ -46,6 +46,11 @@ apache-avro = { version = "0.22", default-features = false }
 byteorder = "1"
 dirs = "6"
 keyring = { version = "4", default-features = false, features = ["v1"] }
+
+[target.'cfg(windows)'.dependencies]
+# Same stack Tauri/wry use — PlatformWebview::controller() → SetMemoryUsageTargetLevel.
+webview2-com = "0.39"
+windows = "0.62"
 
 [profile.release]
 lto = true

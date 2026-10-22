@@ -31,7 +31,8 @@ export function loadMessageViewMode(): MessageViewMode {
   } catch {
     /* ignore */
   }
-  return 'full'
+  // Compact keeps far fewer DOM nodes in the message list (RAM).
+  return 'compact'
 }
 
 export function persistMessageViewMode(mode: MessageViewMode): void {

@@ -1,9 +1,12 @@
 import type { KafkaMessageView } from '../types/kafdesk'
 import { timeInputToMs } from './savedQueries'
+import type { SearchScope } from './searchScope'
+import { uiSearchFromStored, wireSearch } from './searchScope'
 
 export interface ClientMessageFilter {
   search?: string
   searchKey?: string
+  searchScope?: SearchScope
   headerKey?: string
   headerValue?: string
   /** datetime-local string — filtered on the loaded window only */
@@ -17,22 +20,29 @@ function messageTsMs(raw: string): number | null {
   return n < 1e12 ? n * 1000 : n
 }
 
+function valueHaystack(m: KafkaMessageView): string {
+  return `${m.rawPreview} ${JSON.stringify(m.value)}`.toLowerCase()
+}
+
 /** Client-side filter over an already loaded consume window (not a broker re-fetch). */
 export function messageMatchesClientFilter(
   m: KafkaMessageView,
   f: ClientMessageFilter,
 ): boolean {
-  const search = f.search?.trim().toLowerCase()
-  const searchKey = f.searchKey?.trim().toLowerCase()
+  const { text, scope } = uiSearchFromStored(f.search ?? '', f.searchKey ?? '', f.searchScope)
+  const needle = text.trim().toLowerCase()
   const headerKey = f.headerKey?.trim().toLowerCase()
   const headerValue = f.headerValue?.trim().toLowerCase()
 
-  const keyText = (m.key || '').toLowerCase()
-  if (searchKey && !keyText.includes(searchKey)) return false
-
-  if (search) {
-    const haystack = `${m.key ?? ''} ${m.rawPreview} ${JSON.stringify(m.value)}`.toLowerCase()
-    if (!haystack.includes(search)) return false
+  if (needle) {
+    const keyText = (m.key || '').toLowerCase()
+    const ok =
+      scope === 'key'
+        ? keyText.includes(needle)
+        : scope === 'value'
+          ? valueHaystack(m).includes(needle)
+          : `${keyText} ${valueHaystack(m)}`.includes(needle)
+    if (!ok) return false
   }
 
   if (headerKey || headerValue) {
@@ -63,9 +73,9 @@ export function filterMessages(
   messages: KafkaMessageView[],
   f: ClientMessageFilter,
 ): KafkaMessageView[] {
+  const { text } = uiSearchFromStored(f.search ?? '', f.searchKey ?? '', f.searchScope)
   const active =
-    Boolean(f.search?.trim()) ||
-    Boolean(f.searchKey?.trim()) ||
+    Boolean(text.trim()) ||
     Boolean(f.headerKey?.trim()) ||
     Boolean(f.headerValue?.trim()) ||
     Boolean(f.timeFrom?.trim()) ||
@@ -75,12 +85,22 @@ export function filterMessages(
 }
 
 export function clientFilterActive(f: ClientMessageFilter): boolean {
+  const { text } = uiSearchFromStored(f.search ?? '', f.searchKey ?? '', f.searchScope)
   return (
-    Boolean(f.search?.trim()) ||
-    Boolean(f.searchKey?.trim()) ||
+    Boolean(text.trim()) ||
     Boolean(f.headerKey?.trim()) ||
     Boolean(f.headerValue?.trim()) ||
     Boolean(f.timeFrom?.trim()) ||
     Boolean(f.timeTo?.trim())
   )
+}
+
+/** Expand filter state into IPC search fields. */
+export function wireClientSearch(f: {
+  search: string
+  searchKey: string
+  searchScope: SearchScope
+}) {
+  const { text, scope } = uiSearchFromStored(f.search, f.searchKey, f.searchScope)
+  return wireSearch(text, scope)
 }

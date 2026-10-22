@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react'
 
+/** Above this size, skip tokenization — plain text avoids thousands of React nodes. */
+export const HIGHLIGHT_MAX_CHARS = 64 * 1024
+
 const TOKEN =
   /("(?:\\.|[^"\\])*")(\s*:)?|(\btrue\b|\bfalse\b|\bnull\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\s+|[{}\[\],])/g
 
@@ -11,6 +14,7 @@ function looksLikeJson(text: string): boolean {
 /** Lightweight JSON syntax highlight (no deps). Plain text returned as-is. */
 export function highlightMessageBody(text: string): ReactNode {
   if (!looksLikeJson(text)) return text
+  if (text.length > HIGHLIGHT_MAX_CHARS) return text
 
   const nodes: ReactNode[] = []
   let last = 0

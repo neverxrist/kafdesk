@@ -5,8 +5,17 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react'
-import type { ClusterConfig, SchemaRegistryStatus } from '../types/kafdesk'
-import type { AuthMethodUi } from '../lib/connections'
+import type {
+  ClusterConfig,
+  ConnectionEnvTag,
+  SchemaRegistryStatus,
+  TlsPemConfig,
+} from '../types/kafdesk'
+import {
+  securityProtocolFromConfig,
+  type AuthMethodUi,
+  type SecurityProtocolUi,
+} from '../lib/connections'
 import type { useLocale } from '../hooks/useLocale'
 import PasswordInput from './PasswordInput'
 import PathBrowseInput from './PathBrowseInput'
@@ -20,6 +29,37 @@ import {
 } from './ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
+
+function tlsPemNonEmpty(t: TlsPemConfig): boolean {
+  return Boolean(
+    t.caPath?.trim() ||
+      t.certPath?.trim() ||
+      t.keyPath?.trim() ||
+      t.rejectUnauthorized === false,
+  )
+}
+
+function tlsPemSame(a: TlsPemConfig, b: TlsPemConfig): boolean {
+  return (
+    (a.caPath?.trim() || '') === (b.caPath?.trim() || '') &&
+    (a.certPath?.trim() || '') === (b.certPath?.trim() || '') &&
+    (a.keyPath?.trim() || '') === (b.keyPath?.trim() || '') &&
+    a.rejectUnauthorized === b.rejectUnauthorized
+  )
+}
+
+function envTagLabel(tr: Tr, tag: ConnectionEnvTag): string {
+  switch (tag) {
+    case 'prod':
+      return tr('envTag_prod')
+    case 'stage':
+      return tr('envTag_stage')
+    case 'dev':
+      return tr('envTag_dev')
+    default:
+      return tr('envTag_other')
+  }
+}
 
 export default function ConnectionDrawer({
   tr,
@@ -49,7 +89,6 @@ export default function ConnectionDrawer({
   onCancelDeleteConnection,
   onConfirmDeleteConnection,
   onUpdateConfig,
-  onSetAuthMethod,
   onSaveConnectionDetails,
   onConnect,
   onReconnect,
@@ -83,7 +122,6 @@ export default function ConnectionDrawer({
   onCancelDeleteConnection: () => void
   onConfirmDeleteConnection: () => void
   onUpdateConfig: (patch: Partial<ClusterConfig>) => void
-  onSetAuthMethod: (method: AuthMethodUi) => void
   onSaveConnectionDetails: () => void
   onConnect: () => void
   onReconnect: () => void
@@ -98,15 +136,52 @@ export default function ConnectionDrawer({
   const hasSrAuth = Boolean(
     config.schemaRegistryAuth?.username?.trim() || config.schemaRegistryAuth?.password,
   )
-  const tls = config.schemaRegistryTls
-  const hasTls = Boolean(
-    tls?.caPath?.trim() ||
-      tls?.certPath?.trim() ||
-      tls?.keyPath?.trim() ||
-      tls?.rejectUnauthorized === false,
-  )
+  /**
+   * Kafka TLS UI: prefer kafkaTls; fall back to legacy shared schemaRegistryTls
+   * only when kafkaTls is unset (old saves stored PEMs there).
+   */
+  const kafkaTls: TlsPemConfig = config.kafkaTls ?? config.schemaRegistryTls ?? {}
+  /** Opt-in: only when explicitly true. */
+  const srReuseKafkaTls = config.schemaRegistryReuseKafkaTls === true
+  /**
+   * SR-own PEMs: hide legacy-shared / accidental Kafka copies so SR fold
+   * does not look "filled" when the user only configured Kafka TLS.
+   */
+  const srTlsOwn: TlsPemConfig = (() => {
+    const sr = config.schemaRegistryTls
+    if (!sr || !tlsPemNonEmpty(sr)) return {}
+    if (!config.kafkaTls) return {} // legacy shared → Kafka fold owns it
+    if (tlsPemSame(sr, config.kafkaTls)) return {} // duplicate of Kafka
+    return sr
+  })()
+  const hasKafkaTls = tlsPemNonEmpty(kafkaTls)
+  const hasSrTlsOwn = tlsPemNonEmpty(srTlsOwn)
   const [tlsOpen, setTlsOpen] = useState(false)
   const [srOpen, setSrOpen] = useState(false)
+  const [srTlsOpen, setSrTlsOpen] = useState(false)
+
+  // One-shot: migrate legacy shared / seeded duplicate PEMs into kafkaTls only.
+  useEffect(() => {
+    if (
+      !config.kafkaTls &&
+      config.ssl &&
+      config.schemaRegistryTls &&
+      tlsPemNonEmpty(config.schemaRegistryTls)
+    ) {
+      onUpdateConfig({
+        kafkaTls: config.schemaRegistryTls,
+        schemaRegistryTls: undefined,
+      })
+      return
+    }
+    if (
+      config.kafkaTls &&
+      config.schemaRegistryTls &&
+      tlsPemSame(config.kafkaTls, config.schemaRegistryTls)
+    ) {
+      onUpdateConfig({ schemaRegistryTls: undefined })
+    }
+  }, [config.id]) // eslint-disable-line react-hooks/exhaustive-deps -- migrate once per connection
 
   const nameOk = Boolean(config.name?.trim())
   const hostOk = Boolean(brokerHost.trim())
@@ -117,11 +192,52 @@ export default function ConnectionDrawer({
   // SR is optional — opening the panel must not block Connect
   const canConnect = nameOk && brokersOk && saslUserOk && saslPassOk
 
-  const tlsMeta = tls?.caPath?.trim()
+  function patchKafkaTls(patch: Partial<TlsPemConfig>) {
+    const base = config.kafkaTls ?? config.schemaRegistryTls ?? {}
+    onUpdateConfig({
+      kafkaTls: { ...base, ...patch },
+      // Leave SR PEMs alone unless we were still on the legacy shared field
+      ...(!config.kafkaTls && config.schemaRegistryTls ? { schemaRegistryTls: undefined } : {}),
+    })
+  }
+
+  function patchSrTls(patch: Partial<TlsPemConfig>) {
+    onUpdateConfig({
+      schemaRegistryReuseKafkaTls: false,
+      schemaRegistryTls: { ...(config.schemaRegistryTls ?? {}), ...patch },
+    })
+  }
+
+  const securityProtocol = securityProtocolFromConfig(config)
+  const brokerTlsOn = securityProtocol === 'ssl' || securityProtocol === 'sasl_ssl'
+
+  useEffect(() => {
+    if (!brokerTlsOn) setTlsOpen(false)
+  }, [brokerTlsOn])
+
+  function setSecurityProtocol(next: SecurityProtocolUi) {
+    const ssl = next === 'ssl' || next === 'sasl_ssl'
+    const sasl = next === 'sasl_plaintext' || next === 'sasl_ssl'
+    if (sasl) {
+      onUpdateConfig({
+        ssl,
+        authMode: 'sasl',
+        sasl: {
+          mechanism: config.sasl?.mechanism || 'plain',
+          username: config.sasl?.username || '',
+          password: config.sasl?.password || '',
+        },
+      })
+      return
+    }
+    onUpdateConfig({ ssl, authMode: 'none' })
+  }
+
+  const tlsMeta = kafkaTls.caPath?.trim()
     ? tr('tlsToggleCa')
-    : hasTls
+    : hasKafkaTls
       ? tr('tlsToggleCustom')
-      : config.ssl
+      : brokerTlsOn
         ? tr('tlsToggleSslHint')
         : tr('tlsToggleOff')
 
@@ -167,16 +283,16 @@ export default function ConnectionDrawer({
     document.body.classList.add('conn-reordering')
   }
 
-  const srMeta =
-    srStatus === 'ok'
+  // Prefer form URL: empty field must not keep stale session "OK".
+  const srMeta = !hasSr
+    ? tr('srToggleOff')
+    : srStatus === 'ok'
       ? tr('srToggleOn')
-      : srStatus === 'fail' && hasSr
+      : srStatus === 'fail'
         ? tr('srToggleFail')
-        : hasSr && hasSrAuth
+        : hasSrAuth
           ? tr('srToggleUrlAuth')
-          : hasSr
-            ? tr('srToggleUrlSet')
-            : tr('srToggleOff')
+          : tr('srToggleUrlSet')
 
   useEffect(() => {
     // Keep panels closed when switching connections; reopen only on demand
@@ -274,6 +390,14 @@ export default function ConnectionDrawer({
                     >
                       <strong>
                         {active && <span className={`dot ${connected ? 'on' : ''}`} />}
+                        {c.envTag ? (
+                          <span
+                            className={`conn-env-tag env-${c.envTag}`}
+                            title={envTagLabel(tr, c.envTag)}
+                          >
+                            {envTagLabel(tr, c.envTag)}
+                          </span>
+                        ) : null}
                         {c.name}
                       </strong>
                       <small className="conn-meta">
@@ -347,46 +471,41 @@ export default function ConnectionDrawer({
         <div className="panel drag-scroll" ref={detailsRef}>
           <h2>{tr('editTitle', { name: config.name })}</h2>
           <p className="hint">{tr('editHint')}</p>
-          <div className={`field ${nameOk ? '' : 'field-missing'}`.trim()}>
-            {reqLabel(tr('name'), nameOk)}
-            <input
-              value={config.name}
-              onChange={(e) => onUpdateConfig({ name: e.target.value })}
-              aria-required
-              autoCapitalize="none"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-              lang="en"
-            />
-          </div>
-
-          <div className="field auth-method-field">
-            <label>{tr('kafkaAuth')}</label>
-            <div className="auth-method-row">
+          <div className="conn-name-env-row">
+            <div className={`field ${nameOk ? '' : 'field-missing'}`.trim()}>
+              {reqLabel(tr('name'), nameOk)}
+              <input
+                value={config.name}
+                onChange={(e) => onUpdateConfig({ name: e.target.value })}
+                aria-required
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="off"
+                spellCheck={false}
+                lang="en"
+              />
+            </div>
+            <div className="field conn-env-field">
+              <label>{tr('envTag')}</label>
               <select
-                value={authMethod}
-                onChange={(e) => onSetAuthMethod(e.target.value as AuthMethodUi)}
+                value={config.envTag || ''}
+                onChange={(e) => {
+                  const v = e.target.value as ConnectionEnvTag | ''
+                  onUpdateConfig({ envTag: v ? v : undefined })
+                }}
               >
-                <option value="none">{tr('authNone')}</option>
-                <option value="sasl">{tr('authSasl')}</option>
+                <option value="">{tr('envTagNone')}</option>
+                <option value="prod">{tr('envTag_prod')}</option>
+                <option value="stage">{tr('envTag_stage')}</option>
+                <option value="dev">{tr('envTag_dev')}</option>
+                <option value="other">{tr('envTag_other')}</option>
               </select>
             </div>
           </div>
 
           <div className="broker-host-port-row">
             <div className={`field broker-host-field ${hostOk ? '' : 'field-missing'}`.trim()}>
-              <div className="field-label-row">
-                {reqLabel(tr('brokerHost'), hostOk)}
-                <label className={`ssl-toggle${config.ssl ? ' on' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(config.ssl)}
-                    onChange={(e) => onUpdateConfig({ ssl: e.target.checked })}
-                  />
-                  {tr('ssl')}
-                </label>
-              </div>
+              {reqLabel(tr('brokerHost'), hostOk)}
               <input
                 value={brokerHost}
                 onChange={(e) => setBrokerHost(e.target.value)}
@@ -409,6 +528,21 @@ export default function ConnectionDrawer({
                 onChange={(e) => setBrokerPort(e.target.value.replace(/[^\d]/g, '').slice(0, 5))}
                 aria-required
               />
+            </div>
+          </div>
+
+          <div className="field auth-method-field">
+            <label>{tr('securityProtocol')}</label>
+            <div className="auth-method-row">
+              <select
+                value={securityProtocol}
+                onChange={(e) => setSecurityProtocol(e.target.value as SecurityProtocolUi)}
+              >
+                <option value="plaintext">{tr('securityPlaintext')}</option>
+                <option value="ssl">{tr('securitySsl')}</option>
+                <option value="sasl_plaintext">{tr('securitySaslPlaintext')}</option>
+                <option value="sasl_ssl">{tr('securitySaslSsl')}</option>
+              </select>
             </div>
           </div>
 
@@ -471,10 +605,11 @@ export default function ConnectionDrawer({
             </>
           )}
 
+          {brokerTlsOn && (
           <div className="sr-fold">
             <button
               type="button"
-              className={`sr-fold-toggle ${hasTls ? 'has-sr' : ''}`}
+              className={`sr-fold-toggle ${hasKafkaTls ? 'has-sr' : ''}`}
               onClick={() => setTlsOpen((v) => !v)}
               aria-expanded={tlsOpen}
             >
@@ -484,49 +619,35 @@ export default function ConnectionDrawer({
                 <span className="sr-fold-chevron">{tlsOpen ? '▴' : '▾'}</span>
               </span>
             </button>
-            {hasTls && !tlsOpen && tls?.caPath && (
-              <div className="sr-fold-summary" title={tls.caPath}>
-                {tls.caPath}
+            {hasKafkaTls && !tlsOpen && kafkaTls.caPath && (
+              <div className="sr-fold-summary" title={kafkaTls.caPath}>
+                {kafkaTls.caPath}
               </div>
             )}
             {tlsOpen && (
               <div className="sr-fold-body">
-                <p className="tls-fold-hint">{tr('tlsHint')}</p>
                 <div className="field">
                   <label>{tr('tlsCa')}</label>
                   <PathBrowseInput
-                    value={tls?.caPath || ''}
-                    onChange={(caPath) =>
-                      onUpdateConfig({
-                        schemaRegistryTls: { ...config.schemaRegistryTls, caPath },
-                      })
-                    }
+                    value={kafkaTls.caPath || ''}
+                    onChange={(caPath) => patchKafkaTls({ caPath })}
                     onBrowse={async () => {
                       const p = await window.kafdesk.pickPemFile?.()
-                      if (p)
-                        onUpdateConfig({
-                          schemaRegistryTls: { ...config.schemaRegistryTls, caPath: p },
-                        })
+                      if (p) patchKafkaTls({ caPath: p })
                     }}
                     placeholder={tr('tlsPathPh')}
                     browseLabel={tr('browse')}
                   />
                 </div>
+                <p className="tls-mtls-label">{tr('tlsClientCertSection')}</p>
                 <div className="field">
                   <label>{tr('tlsCert')}</label>
                   <PathBrowseInput
-                    value={tls?.certPath || ''}
-                    onChange={(certPath) =>
-                      onUpdateConfig({
-                        schemaRegistryTls: { ...config.schemaRegistryTls, certPath },
-                      })
-                    }
+                    value={kafkaTls.certPath || ''}
+                    onChange={(certPath) => patchKafkaTls({ certPath })}
                     onBrowse={async () => {
                       const p = await window.kafdesk.pickPemFile?.()
-                      if (p)
-                        onUpdateConfig({
-                          schemaRegistryTls: { ...config.schemaRegistryTls, certPath: p },
-                        })
+                      if (p) patchKafkaTls({ certPath: p })
                     }}
                     placeholder={tr('tlsPathPh')}
                     browseLabel={tr('browse')}
@@ -535,18 +656,11 @@ export default function ConnectionDrawer({
                 <div className="field">
                   <label>{tr('tlsKey')}</label>
                   <PathBrowseInput
-                    value={tls?.keyPath || ''}
-                    onChange={(keyPath) =>
-                      onUpdateConfig({
-                        schemaRegistryTls: { ...config.schemaRegistryTls, keyPath },
-                      })
-                    }
+                    value={kafkaTls.keyPath || ''}
+                    onChange={(keyPath) => patchKafkaTls({ keyPath })}
                     onBrowse={async () => {
                       const p = await window.kafdesk.pickPemFile?.()
-                      if (p)
-                        onUpdateConfig({
-                          schemaRegistryTls: { ...config.schemaRegistryTls, keyPath: p },
-                        })
+                      if (p) patchKafkaTls({ keyPath: p })
                     }}
                     placeholder={tr('tlsPathPh')}
                     browseLabel={tr('browse')}
@@ -556,24 +670,23 @@ export default function ConnectionDrawer({
                   <label className="status">
                     <input
                       type="checkbox"
-                      checked={tls?.rejectUnauthorized === false}
-                      onChange={(e) =>
-                        onUpdateConfig({
-                          schemaRegistryTls: {
-                            ...config.schemaRegistryTls,
-                            rejectUnauthorized: !e.target.checked,
-                          },
-                        })
-                      }
+                      checked={kafkaTls.rejectUnauthorized === false}
+                      onChange={(e) => patchKafkaTls({ rejectUnauthorized: !e.target.checked })}
                     />
                     {tr('tlsInsecure')}
                   </label>
                 </div>
-                {hasTls && (
+                {hasKafkaTls && (
                   <button
                     type="button"
                     className="sr-clear"
-                    onClick={() => onUpdateConfig({ schemaRegistryTls: undefined })}
+                    onClick={() =>
+                      onUpdateConfig({
+                        kafkaTls: undefined,
+                        // Keep legacy field clear if it was the only store
+                        ...(config.kafkaTls ? {} : { schemaRegistryTls: undefined }),
+                      })
+                    }
                   >
                     {tr('tlsClear')}
                   </button>
@@ -581,11 +694,12 @@ export default function ConnectionDrawer({
               </div>
             )}
           </div>
+          )}
 
           <div className="sr-fold">
             <button
               type="button"
-              className={`sr-fold-toggle ${srStatus === 'ok' ? 'has-sr' : ''} ${srStatus === 'fail' ? 'sr-fail' : ''}`}
+              className={`sr-fold-toggle ${hasSr && srStatus === 'ok' ? 'has-sr' : ''} ${hasSr && srStatus === 'fail' ? 'sr-fail' : ''}`}
               onClick={() => setSrOpen((v) => !v)}
               aria-expanded={srOpen}
             >
@@ -639,6 +753,112 @@ export default function ConnectionDrawer({
                     hideLabel={tr('hidePassword')}
                   />
                 </div>
+
+                <div className="sr-fold sr-fold-nested">
+                  <button
+                    type="button"
+                    className={`sr-fold-toggle ${srReuseKafkaTls || hasSrTlsOwn ? 'has-sr' : ''}`}
+                    onClick={() => setSrTlsOpen((v) => !v)}
+                    aria-expanded={srTlsOpen}
+                  >
+                    <span>{tr('srTlsToggle')}</span>
+                    <span className="sr-fold-meta">
+                      {srReuseKafkaTls
+                        ? tr('srTlsToggleReuse')
+                        : srTlsOwn.caPath?.trim()
+                          ? tr('tlsToggleCa')
+                          : hasSrTlsOwn
+                            ? tr('tlsToggleCustom')
+                            : tr('tlsToggleOff')}
+                      <span className="sr-fold-chevron">{srTlsOpen ? '▴' : '▾'}</span>
+                    </span>
+                  </button>
+                  {!srTlsOpen && !srReuseKafkaTls && hasSrTlsOwn && srTlsOwn.caPath && (
+                    <div className="sr-fold-summary" title={srTlsOwn.caPath}>
+                      {srTlsOwn.caPath}
+                    </div>
+                  )}
+                  {srTlsOpen && (
+                    <div className="sr-fold-body">
+                      <label className="status sr-reuse-tls" title={tr('srReuseKafkaTlsTitle')}>
+                        <input
+                          type="checkbox"
+                          checked={srReuseKafkaTls}
+                          onChange={(e) =>
+                            onUpdateConfig({ schemaRegistryReuseKafkaTls: e.target.checked })
+                          }
+                        />
+                        {tr('srReuseKafkaTls')}
+                      </label>
+                      {!srReuseKafkaTls && (
+                        <>
+                          <div className="field">
+                            <label>{tr('srTlsCa')}</label>
+                            <PathBrowseInput
+                              value={srTlsOwn.caPath || ''}
+                              onChange={(caPath) => patchSrTls({ caPath })}
+                              onBrowse={async () => {
+                                const p = await window.kafdesk.pickPemFile?.()
+                                if (p) patchSrTls({ caPath: p })
+                              }}
+                              placeholder={tr('srTlsPathPh')}
+                              browseLabel={tr('browse')}
+                            />
+                          </div>
+                          <p className="tls-mtls-label">{tr('tlsClientCertSection')}</p>
+                          <div className="field">
+                            <label>{tr('srTlsCert')}</label>
+                            <PathBrowseInput
+                              value={srTlsOwn.certPath || ''}
+                              onChange={(certPath) => patchSrTls({ certPath })}
+                              onBrowse={async () => {
+                                const p = await window.kafdesk.pickPemFile?.()
+                                if (p) patchSrTls({ certPath: p })
+                              }}
+                              placeholder={tr('srTlsPathPh')}
+                              browseLabel={tr('browse')}
+                            />
+                          </div>
+                          <div className="field">
+                            <label>{tr('srTlsKey')}</label>
+                            <PathBrowseInput
+                              value={srTlsOwn.keyPath || ''}
+                              onChange={(keyPath) => patchSrTls({ keyPath })}
+                              onBrowse={async () => {
+                                const p = await window.kafdesk.pickPemFile?.()
+                                if (p) patchSrTls({ keyPath: p })
+                              }}
+                              placeholder={tr('srTlsPathPh')}
+                              browseLabel={tr('browse')}
+                            />
+                          </div>
+                          <div className="row">
+                            <label className="status">
+                              <input
+                                type="checkbox"
+                                checked={srTlsOwn.rejectUnauthorized === false}
+                                onChange={(e) =>
+                                  patchSrTls({ rejectUnauthorized: !e.target.checked })
+                                }
+                              />
+                              {tr('srTlsInsecure')}
+                            </label>
+                          </div>
+                          {hasSrTlsOwn && (
+                            <button
+                              type="button"
+                              className="sr-clear"
+                              onClick={() => onUpdateConfig({ schemaRegistryTls: undefined })}
+                            >
+                              {tr('srTlsClear')}
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {(hasSr || hasSrAuth) && (
                   <button
                     type="button"
@@ -694,8 +914,8 @@ export default function ConnectionDrawer({
                 className="icon-action conn-ping-btn"
                 disabled={busy || !canConnect}
                 onClick={onPing}
-                title={tr('ping')}
-                aria-label={tr('ping')}
+                title={tr('testConnection')}
+                aria-label={tr('testConnection')}
               >
                 <PingIcon />
               </button>

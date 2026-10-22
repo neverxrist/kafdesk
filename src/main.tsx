@@ -1,21 +1,13 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
-// Bundle fonts into the app — Google Fonts CDN makes packaged builds janky/offline-fragile
+// Bundle fonts — keep weights lean (RAM + installer); 400/600 cover UI.
 import '@fontsource/ibm-plex-sans/400.css'
-import '@fontsource/ibm-plex-sans/500.css'
 import '@fontsource/ibm-plex-sans/600.css'
-import '@fontsource/ibm-plex-sans/700.css'
 import '@fontsource/ibm-plex-sans/cyrillic-400.css'
-import '@fontsource/ibm-plex-sans/cyrillic-500.css'
 import '@fontsource/ibm-plex-sans/cyrillic-600.css'
-import '@fontsource/ibm-plex-sans/cyrillic-700.css'
 import '@fontsource/ibm-plex-mono/400.css'
-import '@fontsource/ibm-plex-mono/500.css'
-import '@fontsource/ibm-plex-mono/600.css'
 import '@fontsource/ibm-plex-mono/cyrillic-400.css'
-import '@fontsource/ibm-plex-mono/cyrillic-500.css'
-import '@fontsource/ibm-plex-mono/cyrillic-600.css'
 import './styles.css'
 import { installDragScroll } from './lib/dragScroll'
 import { applyMsgFontPx, loadMsgFontPx } from './lib/msgFontScale'
@@ -31,6 +23,10 @@ document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'li
 document.documentElement.setAttribute('data-glass', '0')
 /* WKWebView with lang=ru capitalizes sentence starts in inputs otherwise. */
 document.documentElement.setAttribute('autocapitalize', 'off')
+document.documentElement.setAttribute('autocorrect', 'off')
+document.documentElement.setAttribute('spellcheck', 'false')
+document.body?.setAttribute('autocapitalize', 'off')
+document.body?.setAttribute('spellcheck', 'false')
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

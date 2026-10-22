@@ -9,7 +9,7 @@ import TailPanel, { TailToolbar } from './components/panels/TailPanel'
 import ProducePanel from './components/panels/ProducePanel'
 import GroupsPanel from './components/panels/GroupsPanel'
 import SchemasPanel from './components/panels/SchemasPanel'
-import LogsPanel from './components/panels/LogsPanel'
+import LogsPanel, { useBackendDebugSync } from './components/panels/LogsPanel'
 import SettingsPanel from './components/panels/SettingsPanel'
 import { useAppLogs } from './hooks/useAppLogs'
 import { useKafdeskApp } from './hooks/useKafdeskApp'
@@ -29,6 +29,7 @@ export default function App() {
   useGlass()
   const { tr, toggleLocale } = useLocale()
   const { logs, setLogs, pushLog } = useAppLogs()
+  const [backendDebug, setBackendDebug] = useBackendDebugSync(pushLog)
   const a = useKafdeskApp(pushLog)
   const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false)
   const tabBeforeOverlay = useRef<AppTab>('consume')
@@ -107,7 +108,6 @@ export default function App() {
         onCancelDeleteConnection={a.cancelDeleteConnection}
         onConfirmDeleteConnection={a.confirmDeleteConnection}
         onUpdateConfig={a.updateConfig}
-        onSetAuthMethod={a.setAuthMethod}
         onSaveConnectionDetails={a.saveConnectionDetails}
         onConnect={a.connect}
         onReconnect={a.reconnect}
@@ -134,6 +134,8 @@ export default function App() {
           onToggleLogs={() => {
             if (a.tab === 'logs') {
               a.setTab(tabBeforeOverlay.current)
+              // Keep a short trail after leaving Logs (RAM).
+              setLogs((prev) => prev.slice(0, 40))
             } else {
               if (!isOverlayTab(a.tab)) tabBeforeOverlay.current = a.tab
               a.setTab('logs')
@@ -170,8 +172,8 @@ export default function App() {
             topicDetails={a.topicDetails}
             search={a.search}
             setSearch={a.setSearch}
-            searchKey={a.searchKey}
-            setSearchKey={a.setSearchKey}
+            searchScope={a.searchScope}
+            setSearchScope={a.setSearchScope}
             headerKey={a.headerKey}
             setHeaderKey={a.setHeaderKey}
             headerValue={a.headerValue}
@@ -203,8 +205,8 @@ export default function App() {
             topicDetails={a.topicDetails}
             search={a.search}
             setSearch={a.setSearch}
-            searchKey={a.searchKey}
-            setSearchKey={a.setSearchKey}
+            searchScope={a.searchScope}
+            setSearchScope={a.setSearchScope}
             partitionFilter={a.partitionFilter}
             setPartitionFilter={a.setPartitionFilter}
             tailing={a.tailing}
@@ -215,7 +217,13 @@ export default function App() {
         )}
 
         {a.tab === 'logs' ? (
-          <LogsPanel tr={tr} logs={logs} onClear={() => setLogs([])} />
+          <LogsPanel
+            tr={tr}
+            logs={logs}
+            onClear={() => setLogs([])}
+            backendDebug={backendDebug}
+            onBackendDebugChange={setBackendDebug}
+          />
         ) : a.tab === 'settings' ? (
           <SettingsPanel
             tr={tr}
@@ -240,6 +248,8 @@ export default function App() {
                 onSelectTopic={a.selectTopic}
                 pinnedTopics={a.pinnedTopics}
                 onTogglePin={a.togglePinTopic}
+                subjects={a.subjects}
+                hasRegistry={a.hasRegistry}
               />
             )}
 
@@ -251,8 +261,6 @@ export default function App() {
                 messages={a.filteredMessages}
                 windowMessageCount={a.windowMessageCount}
                 selectedTopic={a.selectedTopic}
-                subjects={a.subjects}
-                hasRegistry={a.hasRegistry}
                 busy={a.loadingMessages}
                 startFrom={a.startFrom}
                 diffMessages={a.diffMessages}

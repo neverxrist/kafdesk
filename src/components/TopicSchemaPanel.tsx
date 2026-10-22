@@ -25,6 +25,7 @@ export default function TopicSchemaPanel({
   subjects,
   hasRegistry,
   onUseSubject,
+  defaultOpen,
 }: {
   tr: Tr
   topic: string | null
@@ -32,6 +33,8 @@ export default function TopicSchemaPanel({
   hasRegistry: boolean
   /** Produce: set subject (+ usually switch to Avro SR). */
   onUseSubject?: (subject: string) => void
+  /** When false, start collapsed. When omitted, open once subjects are found (produce). */
+  defaultOpen?: boolean
 }) {
   const fromList = useMemo(
     () => (topic ? subjectsForTopic(topic, subjects) : []),
@@ -124,10 +127,14 @@ export default function TopicSchemaPanel({
       })
   }, [picked, hasRegistry])
 
+  // Consume: start collapsed. Produce: open when subjects exist (uncontrolled otherwise).
+  const openAttr =
+    defaultOpen === false ? undefined : matched.length > 0 ? true : undefined
+
   if (!topic) return null
   if (!hasRegistry) {
     return (
-      <details className="topic-schema-panel">
+      <details className="topic-schema-panel" open={openAttr}>
         <summary>{tr('topicSchema')}</summary>
         <p className="field-hint warn">{tr('topicSchemaNoSr')}</p>
       </details>
@@ -138,7 +145,7 @@ export default function TopicSchemaPanel({
 
   if (probeDone && matched.length === 0) {
     return (
-      <details className="topic-schema-panel">
+      <details className="topic-schema-panel" open={openAttr}>
         <summary>{tr('topicSchema')}</summary>
         <p className="field-hint">{tr('topicSchemaNone')}</p>
       </details>
@@ -146,7 +153,7 @@ export default function TopicSchemaPanel({
   }
 
   return (
-    <details className="topic-schema-panel" open={matched.length > 0}>
+    <details className="topic-schema-panel" open={openAttr}>
       <summary>
         {tr('topicSchema')}
         {matched.length > 0 && (

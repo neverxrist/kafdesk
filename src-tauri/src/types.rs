@@ -20,8 +20,19 @@ pub struct ClusterConfig {
     pub schema_registry_url: Option<String>,
     #[serde(default)]
     pub schema_registry_auth: Option<BasicAuth>,
+    /// Kafka broker SSL PEMs (when `ssl` is on).
+    #[serde(default)]
+    pub kafka_tls: Option<SrTls>,
+    /// Schema Registry HTTPS PEMs when not reusing Kafka TLS.
+    /// Legacy saves often stored shared PEMs only here.
     #[serde(default)]
     pub schema_registry_tls: Option<SrTls>,
+    /// Opt-in: when true, SR HTTPS reuses `kafka_tls` (or legacy `schema_registry_tls`).
+    #[serde(default)]
+    pub schema_registry_reuse_kafka_tls: Option<bool>,
+    /// Soft env badge: prod | stage | dev | other
+    #[serde(default)]
+    pub env_tag: Option<String>,
     #[serde(default)]
     pub sso: Option<ConnectionSsoConfig>,
 }
@@ -82,10 +93,13 @@ pub struct ConnectResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PingResult {
     pub kafka: ProbePart,
     #[serde(rename = "schemaRegistry")]
     pub schema_registry: SrProbe,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +279,9 @@ pub struct TailRequest {
     pub search: Option<String>,
     #[serde(default)]
     pub search_key: Option<String>,
+    /// "both" | "key" | "value" — how search / searchKey apply.
+    #[serde(default)]
+    pub search_scope: Option<String>,
     #[serde(default)]
     pub search_header_key: Option<String>,
     #[serde(default)]

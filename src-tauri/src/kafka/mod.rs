@@ -1,4 +1,4 @@
-mod config;
+pub(crate) mod config;
 mod consume;
 mod consume_ctx;
 mod decode;
