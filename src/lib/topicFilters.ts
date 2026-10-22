@@ -1,6 +1,11 @@
 export const TOPIC_FILTERS_KEY = 'kafdesk.topicFilters.v1'
 export const ONLY_PINNED_TOPICS_KEY = 'kafdesk.onlyPinnedTopics'
 export const TOPICS_OPEN_KEY = 'kafdesk.topicsOpen'
+export const TOPICS_WIDTH_KEY = 'kafdesk.topicsWidth'
+
+export const TOPICS_WIDTH_DEFAULT = 280
+export const TOPICS_WIDTH_MIN = 200
+export const TOPICS_WIDTH_MAX = 480
 
 export function loadTopicsOpen(): boolean {
   try {
@@ -16,6 +21,28 @@ export function loadTopicsOpen(): boolean {
 export function persistTopicsOpen(open: boolean): void {
   try {
     localStorage.setItem(TOPICS_OPEN_KEY, open ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clampTopicsWidth(px: number): number {
+  return Math.min(TOPICS_WIDTH_MAX, Math.max(TOPICS_WIDTH_MIN, Math.round(px)))
+}
+
+export function loadTopicsWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(TOPICS_WIDTH_KEY))
+    if (Number.isFinite(n) && n > 0) return clampTopicsWidth(n)
+  } catch {
+    /* ignore */
+  }
+  return TOPICS_WIDTH_DEFAULT
+}
+
+export function persistTopicsWidth(px: number): void {
+  try {
+    localStorage.setItem(TOPICS_WIDTH_KEY, String(clampTopicsWidth(px)))
   } catch {
     /* ignore */
   }

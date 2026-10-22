@@ -5,12 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 
 const RELEASES_API: &str = "https://api.github.com/repos/neverxrist/kafdesk/releases/latest";
+const RELEASES_PAGE: &str = "https://github.com/neverxrist/kafdesk/releases/latest";
+#[cfg(target_os = "macos")]
 const POST_INSTALL_CMDS: &str = "xattr -cr /Applications/KafDesk.app\nopen /Applications/KafDesk.app";
 
 pub struct UpdateState {
@@ -66,7 +68,7 @@ impl UpdateState {
         );
 
         let current = app.package_info().version.to_string();
-        let latest = match find_latest_mac_dmg().await {
+        let latest = match find_latest_asset().await {
             Ok(v) => v,
             Err(e) => {
                 let st = UpdateStatus {
@@ -85,7 +87,7 @@ impl UpdateState {
                 state: "error".into(),
                 version: None,
                 percent: None,
-                message: Some("No macOS DMG found for this arch".into()),
+                message: Some(format!("No installer found for this platform ({})", platform_label())),
             };
             self.emit(app, st.clone());
             return st;
@@ -154,7 +156,14 @@ impl UpdateState {
             return st;
         }
 
-        write_pending(Some(PendingMacUpdate {
+        #[cfg(target_os = "linux")]
+        {
+            if name.to_lowercase().ends_with(".appimage") {
+                let _ = make_executable(&dest);
+            }
+        }
+
+        write_pending(Some(PendingUpdate {
             path: dest.to_string_lossy().into_owned(),
             version: ver.clone(),
         }));
@@ -166,53 +175,55 @@ impl UpdateState {
             message: Some(format!("Downloaded {name}")),
         };
         self.emit(app, st.clone());
-
-        let open = offer_open_dialog(app, &ver).await;
-        if open {
-            open_dmg_and_quit(app, &dest, &ver);
-        }
-
         st
+    }
+
+    pub fn open_downloaded_update(&self, app: &AppHandle) -> Result<(), String> {
+        let pending = read_pending().ok_or_else(|| "No downloaded update".to_string())?;
+        let path = PathBuf::from(&pending.path);
+        if !path.is_file() {
+            write_pending(None);
+            return Err(format!("Update file missing: {}", pending.path));
+        }
+        open_installer_and_quit(app, &path, &pending.version);
+        Ok(())
+    }
+
+    pub fn open_releases_page(&self, app: &AppHandle) -> Result<(), String> {
+        app.opener()
+            .open_url(RELEASES_PAGE, None::<&str>)
+            .map_err(|e| e.to_string())
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct PendingMacUpdate {
+struct PendingUpdate {
     path: String,
     version: String,
 }
 
-async fn offer_open_dialog(app: &AppHandle, version: &str) -> bool {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let message = format!("KafDesk {version} downloaded.");
-    let detail = format!(
-        "Open DMG → KafDesk quits → drag into Applications (Replace).\n\n\
-         Then in Terminal (copied to clipboard):\n\n{POST_INSTALL_CMDS}\n\n\
-         Connections and settings are kept."
-    );
-    app.dialog()
-        .message(message)
-        .kind(MessageDialogKind::Info)
-        .title("KafDesk update")
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Open DMG & quit".into(),
-            "Later".into(),
-        ))
-        .show(move |yes| {
-            let _ = tx.send(yes);
-        });
-    // Keep detail available via log — MessageDialogBuilder may not expose detail on all platforms.
-    log::info!("{detail}");
-    rx.await.unwrap_or(false)
-}
-
-fn open_dmg_and_quit(app: &AppHandle, dmg: &PathBuf, version: &str) {
-    write_pending(Some(PendingMacUpdate {
-        path: dmg.to_string_lossy().into_owned(),
+fn open_installer_and_quit(app: &AppHandle, path: &PathBuf, version: &str) {
+    write_pending(Some(PendingUpdate {
+        path: path.to_string_lossy().into_owned(),
         version: version.to_string(),
     }));
+
+    #[cfg(target_os = "macos")]
     show_post_install_help();
-    let _ = app.opener().open_path(dmg.to_string_lossy(), None::<&str>);
+
+    #[cfg(target_os = "linux")]
+    {
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("appimage"))
+            .unwrap_or(false)
+        {
+            let _ = make_executable(path);
+        }
+    }
+
+    let _ = app.opener().open_path(path.to_string_lossy(), None::<&str>);
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(400));
@@ -220,33 +231,42 @@ fn open_dmg_and_quit(app: &AppHandle, dmg: &PathBuf, version: &str) {
     });
 }
 
+#[cfg(target_os = "macos")]
 fn show_post_install_help() {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(POST_INSTALL_CMDS.as_bytes());
-                }
-                child.wait()
-            });
+    let _ = Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(POST_INSTALL_CMDS.as_bytes());
+            }
+            child.wait()
+        });
 
-        let script = format!(
-            r#"display dialog "1. Перетащи KafDesk.app в Applications → Replace" & return & return & ¬
-  "2. НЕ открывай app двойным кликом — сначала Terminal (⌘V, уже в буфере):" & return & return & ¬
+    let script = r#"display dialog "EN" & return & ¬
+  "1. Drag KafDesk.app to Applications → Replace." & return & ¬
+  "2. Try opening it normally — it often works." & return & ¬
+  "3. If macOS blocks it or the first launch is very slow, paste in Terminal (⌘V, already copied):" & return & return & ¬
   "xattr -cr /Applications/KafDesk.app" & return & ¬
   "open /Applications/KafDesk.app" & return & return & ¬
-  "Если открыть без xattr — первый старт будет очень долгим (Gatekeeper)." buttons {{"OK"}} default button 1 with title "KafDesk — после установки""#
-        );
-        let tmp = std::env::temp_dir().join("kafdesk-post-install.applescript");
-        if fs::write(&tmp, script).is_ok() {
-            let _ = Command::new("osascript")
-                .arg(&tmp)
-                .spawn();
-        }
+  "RU" & return & ¬
+  "1. Перетащи KafDesk.app в Applications → Replace." & return & ¬
+  "2. Попробуй открыть как обычно — часто запускается и так." & return & ¬
+  "3. Если macOS блокирует или первый запуск очень долгий — Terminal (⌘V):" & return & return & ¬
+  "xattr -cr /Applications/KafDesk.app" & return & ¬
+  "open /Applications/KafDesk.app" buttons {"OK"} default button 1 with title "KafDesk — after install / после установки""#;
+    let tmp = std::env::temp_dir().join("kafdesk-post-install.applescript");
+    if fs::write(&tmp, script).is_ok() {
+        let _ = Command::new("osascript").arg(&tmp).spawn();
     }
+}
+
+#[cfg(target_os = "linux")]
+fn make_executable(path: &PathBuf) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
+    perms.set_mode(perms.mode() | 0o111);
+    fs::set_permissions(path, perms).map_err(|e| e.to_string())
 }
 
 async fn download_file(
@@ -273,14 +293,27 @@ async fn download_file(
         file.write_all(&chunk).map_err(|e| e.to_string())?;
         got += chunk.len() as u64;
         if total > 0 {
-            on_progress(((got as f64 / total as f64) * 100.0).min(99.0));
+            on_progress(((got as f64 / total as f64) * 100.0).floor().min(99.0));
         }
     }
     on_progress(100.0);
     Ok(())
 }
 
-async fn find_latest_mac_dmg() -> Result<Option<(String, String, String)>, String> {
+#[derive(Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    #[serde(default)]
+    assets: Vec<GhAsset>,
+}
+
+#[derive(Deserialize)]
+struct GhAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+async fn fetch_latest_release() -> Result<GhRelease, String> {
     let client = reqwest::Client::new();
     let res = client
         .get(RELEASES_API)
@@ -292,43 +325,94 @@ async fn find_latest_mac_dmg() -> Result<Option<(String, String, String)>, Strin
     if !res.status().is_success() {
         return Err(format!("GitHub API {}", res.status()));
     }
-    #[derive(Deserialize)]
-    struct Release {
-        tag_name: String,
-        assets: Vec<Asset>,
-    }
-    #[derive(Deserialize)]
-    struct Asset {
-        name: String,
-        browser_download_url: String,
-    }
-    let rel: Release = res.json().await.map_err(|e| e.to_string())?;
-    let ver = rel.tag_name.trim_start_matches('v').to_string();
-    let arch = mac_arch();
-    let asset = rel
-        .assets
-        .into_iter()
-        .find(|a| {
-            let n = a.name.to_lowercase();
-            n.contains("mac") && n.contains(arch) && n.ends_with(".dmg") && !n.ends_with(".blockmap")
-        });
-    Ok(asset.map(|a| (ver, a.browser_download_url, a.name)))
+    res.json().await.map_err(|e| e.to_string())
 }
 
+fn platform_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else {
+        "unknown"
+    }
+}
+
+/// Pick the installable asset for this OS/arch from the latest GitHub release.
+async fn find_latest_asset() -> Result<Option<(String, String, String)>, String> {
+    let rel = fetch_latest_release().await?;
+    let ver = rel.tag_name.trim_start_matches('v').to_string();
+    let asset = pick_asset(&rel.assets);
+    Ok(asset.map(|a| (ver, a.browser_download_url.clone(), a.name.clone())))
+}
+
+fn pick_asset(assets: &[GhAsset]) -> Option<&GhAsset> {
+    #[cfg(target_os = "macos")]
+    {
+        let arch = mac_arch();
+        return assets.iter().find(|a| {
+            let n = a.name.to_lowercase();
+            n.contains("mac")
+                && n.contains(arch)
+                && n.ends_with(".dmg")
+                && !n.contains("blockmap")
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Prefer NSIS .exe; skip signatures / blockmaps.
+        return assets
+            .iter()
+            .find(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("windows") && n.ends_with(".exe") && !n.contains("blockmap")
+            })
+            .or_else(|| {
+                assets.iter().find(|a| {
+                    let n = a.name.to_lowercase();
+                    n.contains("windows") && n.ends_with(".msi")
+                })
+            });
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // AppImage is simplest to launch; .deb as fallback.
+        return assets
+            .iter()
+            .find(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("linux") && n.ends_with(".appimage")
+            })
+            .or_else(|| {
+                assets.iter().find(|a| {
+                    let n = a.name.to_lowercase();
+                    n.contains("linux") && n.ends_with(".deb")
+                })
+            });
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = assets;
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn mac_arch() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         return "arm64";
     }
-    // Rosetta: prefer arm64 DMG on Apple Silicon
-    #[cfg(target_os = "macos")]
+    if let Ok(out) = Command::new("sysctl")
+        .args(["-n", "hw.optional.arm64"])
+        .output()
     {
-        if let Ok(out) = Command::new("sysctl")
-            .args(["-n", "hw.optional.arm64"])
-            .output()
-        {
-            if String::from_utf8_lossy(&out.stdout).trim() == "1" {
-                return "arm64";
-            }
+        if String::from_utf8_lossy(&out.stdout).trim() == "1" {
+            return "arm64";
         }
     }
     "x64"
@@ -355,10 +439,10 @@ fn pending_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("kafdesk")
-        .join("pending-mac-update.json")
+        .join("pending-update.json")
 }
 
-fn write_pending(p: Option<PendingMacUpdate>) {
+fn write_pending(p: Option<PendingUpdate>) {
     let path = pending_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -371,6 +455,22 @@ fn write_pending(p: Option<PendingMacUpdate>) {
             let _ = fs::write(path, serde_json::to_string(&v).unwrap_or_default());
         }
     }
+}
+
+fn read_pending() -> Option<PendingUpdate> {
+    let path = pending_path();
+    if let Ok(raw) = fs::read_to_string(&path) {
+        if let Ok(v) = serde_json::from_str(&raw) {
+            return Some(v);
+        }
+    }
+    // Migrate older Mac-only pending file name.
+    let legacy = path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("pending-mac-update.json");
+    let raw = fs::read_to_string(legacy).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 #[derive(Serialize, Deserialize)]

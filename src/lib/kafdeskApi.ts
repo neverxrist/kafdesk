@@ -59,6 +59,8 @@ export type KafDeskApi = {
   updateStatus: () => Promise<UpdateStatus>
   updateSettings: () => Promise<UpdateSettings>
   setAutoUpdate: (enabled: boolean) => Promise<UpdateSettings>
+  openDownloadedUpdate: () => Promise<void>
+  openReleases: () => Promise<void>
   getVersion: () => Promise<string>
   onUpdateStatus: (cb: (s: UpdateStatus) => void) => () => void
 }

@@ -8,7 +8,8 @@ on:
 permissions:
   contents: write
 
-# Tauri 2 + rdkafka (cmake). Builds macOS (arm64 + x64), Windows, Linux.
+# Tauri 2 + rdkafka (cmake). Builds macOS arm64, Windows, Linux.
+# No macOS Intel (macos-13 runners are scarce / often stuck in queue).
 
 jobs:
   build:
@@ -20,19 +21,15 @@ jobs:
             rust_target: aarch64-apple-darwin
             artifact_name: mac-arm64
             bundles: dmg,app
-          # Native Intel runner — avoids cross-compiling vendored librdkafka/cmake
-          - platform: macos-13
-            rust_target: x86_64-apple-darwin
-            artifact_name: mac-x64
-            bundles: dmg,app
           - platform: ubuntu-22.04
-            rust_target: x86_64-unknown-linux-gnu
+            # Native host — omit --target so cmake/rdkafka-sys don't cross-compile
+            rust_target: ''
             artifact_name: linux-x64
             bundles: deb,appimage
           - platform: windows-latest
-            rust_target: x86_64-pc-windows-msvc
+            rust_target: ''
             artifact_name: windows-x64
-            bundles: nsis,msi
+            bundles: nsis
 
     runs-on: ${{ matrix.platform }}
 
@@ -46,12 +43,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust_target }}
+          targets: ${{ matrix.rust_target != '' && matrix.rust_target || '' }}
 
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
-          key: ${{ matrix.rust_target }}
+          key: ${{ matrix.artifact_name }}
 
       - name: Install cmake (macOS)
         if: runner.os == 'macOS'
@@ -62,15 +59,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            cmake build-essential curl wget file \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            libssl-dev
+            cmake ninja-build pkg-config build-essential curl wget file \
+            zlib1g-dev libzstd-dev liblz4-dev \
+            libssl-dev libsasl2-dev libcurl4-openssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev patchelf \
+            libfuse2
+          # Prefer distro cmake over any stale /usr/local copy
+          sudo rm -f /usr/local/bin/cmake || true
+          hash -r
+          which cmake
+          cmake --version
 
-      - name: Install cmake (Windows)
+      - name: Install Windows build deps (cmake, nasm, perl)
         if: runner.os == 'Windows'
-        uses: jwlawson/actions-setup-cmake@v2
-        with:
-          cmake-version: '3.31.x'
+        shell: pwsh
+        run: |
+          choco install cmake nasm strawberryperl -y --no-progress
+          echo "C:\Program Files\CMake\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - run: npm ci
 
@@ -80,8 +89,22 @@ jobs:
       - name: Tauri build
         shell: bash
         run: |
+          set -euxo pipefail
+          # Git Bash ships a broken perl; openssl-src (ssl-vendored) needs Strawberry.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            export PATH="/c/Strawberry/perl/bin:$PATH"
+            export PERL="/c/Strawberry/perl/bin/perl.exe"
+            command -v perl && perl -v | head -2
+          fi
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          command -v cmake && cmake --version
+          command -v tauri
+          TARGET_ARGS=()
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            TARGET_ARGS=(--target "${{ matrix.rust_target }}")
+          fi
           node scripts/with-cmake.mjs tauri build \
-            --target "${{ matrix.rust_target }}" \
+            "${TARGET_ARGS[@]}" \
             --bundles "${{ matrix.bundles }}"
         env:
           CI: true
@@ -91,9 +114,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-out
-          BUNDLE="src-tauri/target/${{ matrix.rust_target }}/release/bundle"
-          # Native-target builds may land under target/release/bundle
-          if [ ! -d "$BUNDLE" ]; then
+          BUNDLE=""
+          if [ -n "${{ matrix.rust_target }}" ] && [ -d "src-tauri/target/${{ matrix.rust_target }}/release/bundle" ]; then
+            BUNDLE="src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          else
             BUNDLE="src-tauri/target/release/bundle"
           fi
           echo "Looking in $BUNDLE"
@@ -106,10 +130,8 @@ jobs:
           cp -f "$BUNDLE"/dmg/*.dmg release-out/ 2>/dev/null || true
           cp -f "$BUNDLE"/deb/*.deb release-out/ 2>/dev/null || true
           cp -f "$BUNDLE"/appimage/*.AppImage release-out/ 2>/dev/null || true
-          cp -f "$BUNDLE"/msi/*.msi release-out/ 2>/dev/null || true
           cp -f "$BUNDLE"/nsis/*.exe release-out/ 2>/dev/null || true
 
-          # Zip .app for GitHub Releases (DMG is primary for Mac)
           APP_DIR=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' -type d 2>/dev/null | head -1 || true)
           if [ -n "${APP_DIR:-}" ] && [ -d "$APP_DIR" ]; then
             if command -v ditto >/dev/null 2>&1; then
@@ -123,7 +145,6 @@ jobs:
             fi
           fi
 
-          # Rename for clarity when multiple Mac targets collide on filename
           for f in release-out/*; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
@@ -171,8 +192,7 @@ jobs:
 
             ### Downloads
             - **macOS Apple Silicon** — `*-mac-arm64.dmg`
-            - **macOS Intel** — `*-mac-x64.dmg`
-            - **Windows** — `*-windows-x64.exe` / `.msi`
+            - **Windows** — `*-windows-x64.exe` (NSIS)
             - **Linux** — `*-linux-x64.AppImage` / `.deb`
 
             Unsigned builds: on macOS you may need right-click → Open the first time.

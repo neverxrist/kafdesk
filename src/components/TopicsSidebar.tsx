@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { TopicInfo } from '../types/kafdesk'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
 import {
+  clampTopicsWidth,
   loadOnlyPinnedTopics,
   loadTopicFilters,
   loadTopicsOpen,
+  loadTopicsWidth,
   persistOnlyPinnedTopics,
   persistTopicFilters,
   persistTopicsOpen,
+  persistTopicsWidth,
   type SavedTopicFilter,
 } from '../lib/topicFilters'
 
@@ -36,6 +39,9 @@ export default function TopicsSidebar({
   onTogglePin: (name: string) => void
 }) {
   const [topicsOpen, setTopicsOpen] = useState(() => loadTopicsOpen())
+  const [topicsWidth, setTopicsWidth] = useState(() => loadTopicsWidth())
+  const [resizing, setResizing] = useState(false)
+  const resizeStart = useRef<{ x: number; w: number } | null>(null)
   const [dlqOpen, setDlqOpen] = useState(false)
   const [internalOpen, setInternalOpen] = useState(false)
   const [savedFilters, setSavedFilters] = useState<SavedTopicFilter[]>(() => loadTopicFilters())
@@ -44,6 +50,40 @@ export default function TopicsSidebar({
   function setTopicsPanelOpen(open: boolean) {
     setTopicsOpen(open)
     persistTopicsOpen(open)
+  }
+
+  useEffect(() => {
+    if (!resizing) return
+    function onMove(e: PointerEvent) {
+      const start = resizeStart.current
+      if (!start) return
+      const next = clampTopicsWidth(start.w + (e.clientX - start.x))
+      setTopicsWidth(next)
+    }
+    function onUp() {
+      resizeStart.current = null
+      setResizing(false)
+      document.body.classList.remove('topics-resizing')
+      setTopicsWidth((w) => {
+        persistTopicsWidth(w)
+        return w
+      })
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [resizing])
+
+  function onResizePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault()
+    resizeStart.current = { x: e.clientX, w: topicsWidth }
+    setResizing(true)
+    document.body.classList.add('topics-resizing')
   }
 
   const pinnedSet = new Set(pinnedTopics)
@@ -162,12 +202,41 @@ export default function TopicsSidebar({
   }
 
   return (
-    <section className="topics">
+    <section
+      className={`topics drag-scroll${resizing ? ' is-resizing' : ''}`}
+      style={{ width: topicsWidth }}
+    >
+      <div
+        className="topics-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuenow={topicsWidth}
+        title={tr('resizeTopics')}
+        onPointerDown={onResizePointerDown}
+      />
       <div className="topics-head">
         <label className="topics-head-label">{tr('topics', { n: visibleCount })}</label>
+      </div>
+      <div className="topic-filter-row">
+        <input
+          value={topicQuery}
+          onChange={(e) => setTopicQuery(e.target.value)}
+          placeholder={tr('filterTopics')}
+          disabled={!connected}
+          aria-label={tr('filterTopics')}
+        />
         <button
           type="button"
-          className="icon-btn topics-collapse-btn"
+          className="topic-filter-save"
+          title={tr('saveTopicFilterTitle')}
+          disabled={!connected || !canSaveFilter}
+          onClick={saveCurrentFilter}
+        >
+          {tr('saveTopicFilter')}
+        </button>
+        <button
+          type="button"
+          className="topics-collapse-btn"
           title={tr('collapseTopics')}
           aria-label={tr('collapseTopics')}
           onClick={() => setTopicsPanelOpen(false)}
@@ -175,48 +244,29 @@ export default function TopicsSidebar({
           ⟨
         </button>
       </div>
-      <div className="field">
-        <div className="topic-filter-row">
-          <input
-            value={topicQuery}
-            onChange={(e) => setTopicQuery(e.target.value)}
-            placeholder={tr('filterTopics')}
-            disabled={!connected}
-          />
-          <button
-            type="button"
-            className="topic-filter-save"
-            title={tr('saveTopicFilterTitle')}
-            disabled={!connected || !canSaveFilter}
-            onClick={saveCurrentFilter}
-          >
-            {tr('saveTopicFilter')}
-          </button>
-        </div>
-        {savedFilters.length > 0 && (
-          <div className="topic-filter-chips" aria-label={tr('savedTopicFilters')}>
-            {savedFilters.map((f) => (
-              <span
-                key={f.id}
-                className={`topic-filter-chip${topicQuery === f.query ? ' active' : ''}`}
+      {savedFilters.length > 0 && (
+        <div className="topic-filter-chips" aria-label={tr('savedTopicFilters')}>
+          {savedFilters.map((f) => (
+            <span
+              key={f.id}
+              className={`topic-filter-chip${topicQuery === f.query ? ' active' : ''}`}
+            >
+              <button type="button" className="topic-filter-chip-apply" onClick={() => applyFilter(f)}>
+                {f.name}
+              </button>
+              <button
+                type="button"
+                className="topic-filter-chip-del"
+                title={tr('deleteTopicFilter')}
+                aria-label={tr('deleteTopicFilter')}
+                onClick={() => deleteFilter(f.id)}
               >
-                <button type="button" className="topic-filter-chip-apply" onClick={() => applyFilter(f)}>
-                  {f.name}
-                </button>
-                <button
-                  type="button"
-                  className="topic-filter-chip-del"
-                  title={tr('deleteTopicFilter')}
-                  aria-label={tr('deleteTopicFilter')}
-                  onClick={() => deleteFilter(f.id)}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {!connected && <div className="empty">{tr('connectToSeeTopics')}</div>}
 
       {connected && onlyPinned && pinned.length === 0 && pinnedTopics.length > 0 && (

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import type { UpdateStatus } from '../../types/kafdesk'
-import type { Theme } from '../../lib/connections'
 import type { useLocale } from '../../hooks/useLocale'
 
 type Tr = ReturnType<typeof useLocale>['tr']
@@ -19,10 +18,14 @@ function updateText(tr: Tr, s: UpdateStatus): string {
       return tr('updateAvailable', { version: s.version ?? '' })
     case 'downloaded':
       return tr('updateDownloaded', { version: s.version ?? '' })
+    case 'manual':
+      return tr('updateManual', { version: s.version ?? '' })
     case 'not-available':
       return tr('updateNone')
     case 'downloading':
-      return tr('updateDownloading', { percent: String(s.percent ?? 0) })
+      return tr('updateDownloading', {
+        percent: String(Math.round(s.percent ?? 0)),
+      })
     case 'error':
       return `${tr('updateError')}${s.message ? `: ${s.message}` : ''}`
     case 'idle':
@@ -34,22 +37,18 @@ function updateText(tr: Tr, s: UpdateStatus): string {
 
 export default function SettingsPanel({
   tr,
-  theme,
-  toggleTheme,
-  toggleLocale,
   updateStatus,
   updateAuto,
   onSetAutoUpdate,
   onCheckUpdates,
+  onOpenReleases,
 }: {
   tr: Tr
-  theme: Theme
-  toggleTheme: () => void
-  toggleLocale: () => void
   updateStatus: UpdateStatus
   updateAuto: boolean
   onSetAutoUpdate: (v: boolean) => void
   onCheckUpdates: () => void
+  onOpenReleases: () => void
 }) {
   const [appVersion, setAppVersion] = useState<string>('')
 
@@ -75,27 +74,18 @@ export default function SettingsPanel({
           <span>{tr('autoUpdate')}</span>
         </label>
         <p className="settings-hint">{tr('autoUpdateHint')}</p>
-        <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="settings-actions">
           <button type="button" onClick={onCheckUpdates}>
             {tr('checkUpdates')}
           </button>
+          {updateStatus.state === 'error' || updateStatus.state === 'manual' ? (
+            <button type="button" onClick={onOpenReleases}>
+              {tr('openReleases')}
+            </button>
+          ) : null}
           <span className="status">{updateText(tr, updateStatus)}</span>
         </div>
-      </section>
-
-      <section className="panel settings-block">
-        <h2>{tr('appearance')}</h2>
-        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-          <button type="button" onClick={toggleTheme}>
-            {theme === 'dark' ? tr('themeLight') : tr('themeDark')}
-          </button>
-          <span className="status">
-            {tr('language')}:{' '}
-            <button type="button" onClick={toggleLocale}>
-              {tr('langSwitch')}
-            </button>
-          </span>
-        </div>
+        <p className="settings-hint settings-hint-foot">{tr('appearanceInTopbar')}</p>
       </section>
     </div>
   )

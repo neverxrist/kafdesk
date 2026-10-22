@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
+import ConfirmModal from './components/ConfirmModal'
 import ConnectionDrawer from './components/ConnectionDrawer'
 import ErrorModal from './components/ErrorModal'
-import TopBar from './components/TopBar'
+import TopBar, { type AppTab } from './components/TopBar'
 import TopicsSidebar from './components/TopicsSidebar'
 import ConsumePanel, { ConsumeToolbar } from './components/panels/ConsumePanel'
 import TailPanel, { TailToolbar } from './components/panels/TailPanel'
@@ -12,14 +14,33 @@ import { useAppLogs } from './hooks/useAppLogs'
 import { useKafdeskApp } from './hooks/useKafdeskApp'
 import { useLocale } from './hooks/useLocale'
 import { useTheme } from './hooks/useTheme'
+import { detectUpdateOs } from './lib/updateOs'
+import type { MsgKey } from './i18n'
 
 export default function App() {
   const { theme, toggleTheme } = useTheme()
   const { tr, toggleLocale } = useLocale()
   const { logs, setLogs, pushLog } = useAppLogs()
   const a = useKafdeskApp(pushLog)
+  const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false)
+  const tabBeforeSettings = useRef<AppTab>('consume')
+
+  useEffect(() => {
+    if (a.updateStatus.state !== 'downloaded') setUpdatePromptDismissed(false)
+  }, [a.updateStatus.state])
 
   if (!a.config) return null
+
+  const showUpdatePrompt =
+    a.updateStatus.state === 'downloaded' && !updatePromptDismissed
+
+  const updateOs = detectUpdateOs()
+  const updateDetailKey: MsgKey =
+    updateOs === 'mac'
+      ? 'updateReadyDetailMac'
+      : updateOs === 'win'
+        ? 'updateReadyDetailWin'
+        : 'updateReadyDetailLinux'
 
   return (
     <div className={`app ${a.sidebarOpen ? 'drawer-open' : ''}`}>
@@ -29,6 +50,21 @@ export default function App() {
           message={a.error}
           closeLabel={tr('close')}
           onClose={a.clearError}
+        />
+      )}
+      {showUpdatePrompt && (
+        <ConfirmModal
+          title={tr('updateReadyTitle')}
+          message={tr('updateReadyMessage', {
+            version: a.updateStatus.version ?? '',
+          })}
+          detail={tr(updateDetailKey)}
+          confirmLabel={tr('updateOpenInstall')}
+          cancelLabel={tr('updateLater')}
+          langSwitchLabel={tr('langSwitch')}
+          onLangSwitch={toggleLocale}
+          onConfirm={() => void a.openDownloadedUpdate()}
+          onCancel={() => setUpdatePromptDismissed(true)}
         />
       )}
       <ConnectionDrawer
@@ -71,7 +107,14 @@ export default function App() {
           toggleTheme={toggleTheme}
           toggleLocale={toggleLocale}
           setSidebarOpen={a.setSidebarOpen}
-          onOpenSettings={() => a.setTab('settings')}
+          onToggleSettings={() => {
+            if (a.tab === 'settings') {
+              a.setTab(tabBeforeSettings.current)
+            } else {
+              tabBeforeSettings.current = a.tab
+              a.setTab('settings')
+            }
+          }}
           settingsActive={a.tab === 'settings'}
           connections={a.connections}
           activeId={a.activeId}
@@ -150,13 +193,11 @@ export default function App() {
         ) : a.tab === 'settings' ? (
           <SettingsPanel
             tr={tr}
-            theme={theme}
-            toggleTheme={toggleTheme}
-            toggleLocale={toggleLocale}
             updateStatus={a.updateStatus}
             updateAuto={a.updateAuto}
             onSetAutoUpdate={a.setAutoUpdateEnabled}
             onCheckUpdates={a.checkForUpdates}
+            onOpenReleases={() => void a.openReleases()}
           />
         ) : (
           <div
@@ -188,6 +229,10 @@ export default function App() {
                 onToggleDiff={a.toggleDiffMessage}
                 onClearDiff={a.clearDiff}
                 onRepublish={a.republishMessage}
+                onOpenConsumerGroup={(groupId) => {
+                  a.selectGroup(groupId)
+                  a.setTab('groups')
+                }}
               />
             )}
             {a.tab === 'produce' && (
@@ -205,6 +250,9 @@ export default function App() {
                 topicDetails={a.topicDetails}
                 produceKey={a.produceKey}
                 setProduceKey={a.setProduceKey}
+                produceHeaderRows={a.produceHeaderRows}
+                setProduceHeaderRows={a.setProduceHeaderRows}
+                onAddProduceHeaderRow={a.addProduceHeaderRow}
                 producePartition={a.producePartition}
                 setProducePartition={a.setProducePartition}
                 produceValue={a.produceValue}

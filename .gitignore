@@ -19,7 +19,8 @@ build/icon.iconset
 !.env.example
 *.local
 
-# Local AI tooling (AGENTS.md is tracked — map for agents/humans)
+# Local AI tooling — never commit
+.cursor/
 .claude/
 .codex/
 .continue/
@@ -29,9 +30,6 @@ build/icon.iconset
 .github/copilot-instructions.md
 CLAUDE.md
 GEMINI.md
+AGENTS.md
 .cursorrules
 .cursorignore
-# Keep committed Cursor rules for agents; ignore other local cursor junk if any
-.cursor/*
-!.cursor/rules/
-!.cursor/rules/**

@@ -312,6 +312,22 @@ pub fn app_set_auto_update(
 }
 
 #[tauri::command]
+pub fn app_open_downloaded_update(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state.updates.open_downloaded_update(&app)
+}
+
+#[tauri::command]
+pub fn app_open_releases(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state.updates.open_releases_page(&app)
+}
+
+#[tauri::command]
 pub fn app_get_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
 }

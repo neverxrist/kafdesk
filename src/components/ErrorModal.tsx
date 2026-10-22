@@ -1,3 +1,5 @@
+import errorBg from '../assets/error-bg.png'
+
 type Props = {
   title: string
   message: string
@@ -7,7 +9,8 @@ type Props = {
 
 export default function ErrorModal({ title, message, closeLabel, onClose }: Props) {
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div className="modal-backdrop modal-backdrop-error" role="presentation" onClick={onClose}>
+      <img className="modal-error-bg" src={errorBg} alt="" aria-hidden="true" draggable={false} />
       <div
         className="modal-dialog"
         role="alertdialog"

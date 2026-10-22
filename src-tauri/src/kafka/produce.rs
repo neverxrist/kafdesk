@@ -215,6 +215,16 @@ impl KafkaSession {
                 if let Some(p) = request.partition {
                     record = record.partition(p);
                 }
+                if let Some(ref headers) = request.headers {
+                    let mut owned = OwnedHeaders::new();
+                    for (hk, hv) in headers {
+                        owned = owned.insert(Header {
+                            key: hk,
+                            value: Some(hv.as_bytes()),
+                        });
+                    }
+                    record = record.headers(owned);
+                }
                 let delivery = producer
                     .send(record, Duration::from_secs(45))
                     .await

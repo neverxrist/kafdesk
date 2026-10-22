@@ -144,7 +144,7 @@ export default function GroupsPanel({
       </div>
 
       <div className="groups-layout">
-        <div className="groups-list">
+        <div className="groups-list drag-scroll">
           <div className="field">
             <label>{tr('consumerGroups', { n: filteredGroups.length })}</label>
             <input
@@ -179,7 +179,7 @@ export default function GroupsPanel({
             </button>
           ))}
         </div>
-        <div className="groups-detail">
+        <div className="groups-detail drag-scroll">
           {!selectedGroup && <div className="empty">{tr('selectGroup')}</div>}
           {selectedGroup && (
             <>

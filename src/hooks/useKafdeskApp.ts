@@ -34,6 +34,12 @@ import {
 } from '../lib/produceTemplates'
 import { mockFromAvroSchemaPretty } from '../lib/avroMock'
 import { expandProduceTemplate } from '../lib/produceVars'
+import {
+  emptyHeaderRow,
+  headersFromRows,
+  rowsFromHeaders,
+  type ProduceHeaderRow,
+} from '../lib/produceHeaders'
 import { guessAvroSubject, messageBodyText, messageId } from '../lib/messageText'
 import { stripIpcError } from '../lib/ipcError'
 import type { AppLogEntry } from './useAppLogs'
@@ -115,6 +121,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     'avro' | 'avro-local' | 'json' | 'string'
   >('json')
   const [produceKey, setProduceKey] = useState('')
+  const [produceHeaderRows, setProduceHeaderRows] = useState<ProduceHeaderRow[]>([])
   /** null = broker auto (key hash / round-robin) */
   const [producePartition, setProducePartition] = useState<number | null>(null)
   const [produceValue, setProduceValue] = useState('')
@@ -233,6 +240,16 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     return () => clearInterval(id)
   }, [tab, connected, lagAutoRefresh, selectedTopic]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Mac DMG auto-update: check on enable + every 6h while on
+  useEffect(() => {
+    if (!updateAuto || !window.kafdesk?.checkForUpdates) return
+    void checkForUpdates()
+    const id = setInterval(() => {
+      void checkForUpdates()
+    }, 6 * 60 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [updateAuto]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function updateConfig(patch: Partial<ClusterConfig>) {
     setConnections((prev) => prev.map((c) => (c.id === activeId ? { ...c, ...patch } : c)))
   }
@@ -285,6 +302,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setProduceFormat(format)
     setProduceKey(m.key ?? '')
     setProduceValue(messageBodyText(m))
+    setProduceHeaderRows(rowsFromHeaders(m.headers))
     setProduceResult(null)
     setTab('produce')
     if (format === 'avro') {
@@ -564,7 +582,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       } else {
         setSubjects([])
       }
-      setSidebarOpen(false)
+      // Keep connections drawer open — user closes it explicitly.
       pushLog('info', `Connected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
     } catch (err) {
       const msg = stripIpcError(err instanceof Error ? err.message : String(err))
@@ -987,6 +1005,28 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     }
   }
 
+  async function openDownloadedUpdate() {
+    try {
+      await window.kafdesk.openDownloadedUpdate?.()
+    } catch (err) {
+      setUpdateStatus({
+        state: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  async function openReleases() {
+    try {
+      await window.kafdesk.openReleases?.()
+    } catch (err) {
+      setUpdateStatus({
+        state: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   async function setAutoUpdateEnabled(enabled: boolean) {
     setUpdateAuto(enabled)
     try {
@@ -1156,6 +1196,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         subject: produceFormat === 'avro' ? subject || undefined : undefined,
         localSchema: produceFormat === 'avro-local' ? localSchema || undefined : undefined,
         partition: producePartition ?? undefined,
+        headers: headersFromRows(produceHeaderRows),
       })
       const typeLabel =
         (res.format === 'avro' || res.format === 'avro-local') && res.schemaId != null
@@ -1195,6 +1236,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         subject: produceFormat === 'avro' ? subject || undefined : undefined,
         localSchema: produceFormat === 'avro-local' ? localSchema || undefined : undefined,
         partition: producePartition ?? undefined,
+        headers: headersFromRows(produceHeaderRows),
         messages,
       })
       const typeLabel =
@@ -1287,6 +1329,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     schemaInfo,
     produceKey,
     setProduceKey,
+    produceHeaderRows,
+    setProduceHeaderRows,
+    addProduceHeaderRow: () => setProduceHeaderRows((prev) => [...prev, emptyHeaderRow()]),
     producePartition,
     setProducePartition,
     produceValue,
@@ -1312,6 +1357,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     loadLagSummary,
     updateStatus,
     checkForUpdates,
+    openDownloadedUpdate,
+    openReleases,
     updateAuto,
     setAutoUpdateEnabled,
     addConnection,

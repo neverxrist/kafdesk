@@ -21,7 +21,7 @@ export default function LogsPanel({
         </button>
       </div>
       {logs.length === 0 && <div className="empty">{tr('logsEmpty')}</div>}
-      <ul className="log-list">
+      <ul className="log-list drag-scroll">
         {logs.map((l, i) => (
           <li key={`${l.ts}-${i}`} className={`log-line log-${l.level}`}>
             <time>{new Date(l.ts).toLocaleTimeString()}</time>

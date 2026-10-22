@@ -3,7 +3,7 @@ import { LOCALE_KEY, t, type Locale } from '../i18n'
 
 export function useLocale() {
   const [locale, setLocale] = useState<Locale>(() =>
-    localStorage.getItem(LOCALE_KEY) === 'en' ? 'en' : 'ru',
+    localStorage.getItem(LOCALE_KEY) === 'ru' ? 'ru' : 'en',
   )
 
   useEffect(() => {

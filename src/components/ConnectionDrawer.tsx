@@ -72,6 +72,9 @@ export default function ConnectionDrawer({
   onPing: () => void
 }) {
   const hasSr = Boolean(config.schemaRegistryUrl?.trim())
+  const hasSrAuth = Boolean(
+    config.schemaRegistryAuth?.username?.trim() || config.schemaRegistryAuth?.password,
+  )
   const [srOpen, setSrOpen] = useState(false)
 
   const nameOk = Boolean(config.name?.trim())
@@ -81,15 +84,18 @@ export default function ConnectionDrawer({
   // URL is required once the SR panel is open or a URL was already saved
   const srUrlNeeded = srOpen || hasSr
   const srUrlOk = !srUrlNeeded || Boolean(config.schemaRegistryUrl?.trim())
+  const canConnect = nameOk && brokersOk && saslUserOk && saslPassOk && srUrlOk
 
   const srMeta =
     srStatus === 'ok'
       ? tr('srToggleOn')
       : srStatus === 'fail' && hasSr
         ? tr('srToggleFail')
-        : hasSr
-          ? tr('srToggleUrlSet')
-          : tr('srToggleOff')
+        : hasSr && hasSrAuth
+          ? tr('srToggleUrlAuth')
+          : hasSr
+            ? tr('srToggleUrlSet')
+            : tr('srToggleOff')
 
   useEffect(() => {
     // Keep panel closed when switching connections; reopen only on demand
@@ -123,7 +129,7 @@ export default function ConnectionDrawer({
             <span>{tr('connections')}</span>
           </div>
           <button
-            className="icon-btn"
+            className="sidebar-collapse-btn"
             type="button"
             title={tr('collapse')}
             onClick={() => setSidebarOpen(false)}
@@ -139,7 +145,7 @@ export default function ConnectionDrawer({
           </button>
         </div>
 
-        <div className="conn-list">
+        <div className="conn-list drag-scroll">
           {connections.map((c) => {
             const active = c.id === activeId
             const confirming = pendingDeleteId === c.id
@@ -187,7 +193,7 @@ export default function ConnectionDrawer({
                           <button
                             type="button"
                             className="conn-icon-btn"
-                            disabled={busy || connected}
+                            disabled={busy || connected || !canConnect}
                             onClick={onConnect}
                             title={tr('connect')}
                             aria-label={tr('connect')}
@@ -241,7 +247,7 @@ export default function ConnectionDrawer({
           })}
         </div>
 
-        <div className="panel" ref={detailsRef}>
+        <div className="panel drag-scroll" ref={detailsRef}>
           <h2>{tr('editTitle', { name: config.name })}</h2>
           <p className="hint">{tr('editHint')}</p>
           <div className={`field ${nameOk ? '' : 'field-missing'}`.trim()}>
@@ -505,7 +511,7 @@ export default function ConnectionDrawer({
             <button
               type="button"
               className="primary icon-action"
-              disabled={busy || connected}
+              disabled={busy || connected || !canConnect}
               onClick={onConnect}
               title={tr('connect')}
               aria-label={tr('connect')}
@@ -527,7 +533,7 @@ export default function ConnectionDrawer({
             <button disabled={busy || !connected} onClick={onDisconnect}>
               {tr('disconnect')}
             </button>
-            <button disabled={busy} onClick={onPing}>
+            <button disabled={busy || !canConnect} onClick={onPing}>
               {tr('ping')}
             </button>
             <button type="button" disabled={busy} onClick={() => onDuplicateConnection(activeId)}>

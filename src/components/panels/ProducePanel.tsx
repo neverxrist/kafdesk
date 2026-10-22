@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SchemaSubjectInfo, TopicInfo } from '../../types/kafdesk'
 import type { useLocale } from '../../hooks/useLocale'
 import type { ProduceTemplate } from '../../lib/produceTemplates'
+import type { ProduceHeaderRow } from '../../lib/produceHeaders'
+import { normalizeStraightQuotes } from '../../lib/produceVars'
 import { sortSubjectsForTopic } from '../../lib/messageText'
 
 type Tr = ReturnType<typeof useLocale>['tr']
@@ -28,6 +30,9 @@ export default function ProducePanel({
   topicDetails,
   produceKey,
   setProduceKey,
+  produceHeaderRows,
+  setProduceHeaderRows,
+  onAddProduceHeaderRow,
   producePartition,
   setProducePartition,
   produceValue,
@@ -57,6 +62,9 @@ export default function ProducePanel({
   topicDetails: TopicInfo | null
   produceKey: string
   setProduceKey: (v: string) => void
+  produceHeaderRows: ProduceHeaderRow[]
+  setProduceHeaderRows: (rows: ProduceHeaderRow[] | ((prev: ProduceHeaderRow[]) => ProduceHeaderRow[])) => void
+  onAddProduceHeaderRow: () => void
   producePartition: number | null
   setProducePartition: (v: number | null) => void
   produceValue: string
@@ -82,6 +90,12 @@ export default function ProducePanel({
   const needsSubject = produceFormat === 'avro'
   const needsLocalSchema = produceFormat === 'avro-local'
   const canGenerate = Boolean(schemaInfo?.schema) || Boolean(localSchemaName)
+  const canSend =
+    Boolean(selectedTopic) &&
+    !busy &&
+    Boolean(produceValue.trim()) &&
+    !(needsSubject && !subject) &&
+    !(needsLocalSchema && !localSchemaName)
   const [templateId, setTemplateId] = useState('')
   const [templateName, setTemplateName] = useState('')
   const [bulkCount, setBulkCount] = useState(10)
@@ -109,7 +123,7 @@ export default function ProducePanel({
   }, [templatesOpen])
 
   return (
-    <section className="produce">
+    <section className="produce drag-scroll">
       <div className="panel produce-panel">
         <div className="produce-head">
           <h2>{tr('produce')}</h2>
@@ -315,6 +329,57 @@ export default function ProducePanel({
             </select>
           </div>
         </div>
+
+        <details className="produce-headers" open={produceHeaderRows.length > 0}>
+          <summary>{tr('produceHeaders')}</summary>
+          <div className="produce-headers-body">
+            {produceHeaderRows.length === 0 ? (
+              <p className="field-hint">{tr('produceHeadersEmpty')}</p>
+            ) : (
+              produceHeaderRows.map((row) => (
+                <div key={row.id} className="produce-header-row">
+                  <input
+                    value={row.key}
+                    placeholder={tr('headerKeyPh')}
+                    disabled={busy}
+                    onChange={(e) => {
+                      const key = e.target.value
+                      setProduceHeaderRows((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, key } : r)),
+                      )
+                    }}
+                  />
+                  <input
+                    value={row.value}
+                    placeholder={tr('headerValuePh')}
+                    disabled={busy}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setProduceHeaderRows((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, value } : r)),
+                      )
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="produce-header-remove"
+                    title={tr('produceHeaderRemove')}
+                    disabled={busy}
+                    onClick={() =>
+                      setProduceHeaderRows((prev) => prev.filter((r) => r.id !== row.id))
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+            <button type="button" disabled={busy} onClick={onAddProduceHeaderRow}>
+              {tr('produceHeaderAdd')}
+            </button>
+          </div>
+        </details>
+
         <div className="field">
           <label>
             {tr('value')}
@@ -325,7 +390,10 @@ export default function ProducePanel({
           <textarea
             className="produce-value"
             value={produceValue}
-            onChange={(e) => setProduceValue(e.target.value)}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            onChange={(e) => setProduceValue(normalizeStraightQuotes(e.target.value))}
           />
           <div className="produce-schema-actions">
             {(produceFormat === 'avro' || produceFormat === 'avro-local') && (
@@ -346,12 +414,7 @@ export default function ProducePanel({
           <button
             type="button"
             className="primary"
-            disabled={
-              !selectedTopic ||
-              busy ||
-              (needsSubject && !subject) ||
-              (needsLocalSchema && !localSchemaName)
-            }
+            disabled={!canSend}
             onClick={onSendMessage}
           >
             {tr('sendAs', { format: formatLabel })}
@@ -370,12 +433,7 @@ export default function ProducePanel({
           </label>
           <button
             type="button"
-            disabled={
-              !selectedTopic ||
-              busy ||
-              (needsSubject && !subject) ||
-              (needsLocalSchema && !localSchemaName)
-            }
+            disabled={!canSend}
             onClick={() => onBulkSend(bulkCount)}
           >
             {tr('bulkSend', { n: bulkCount })}

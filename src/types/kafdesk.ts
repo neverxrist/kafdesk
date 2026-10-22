@@ -200,6 +200,8 @@ export interface UpdateStatus {
     | 'not-available'
     | 'downloading'
     | 'downloaded'
+    /** Newer release exists; open GitHub Releases (Win/Linux — no in-app install) */
+    | 'manual'
     | 'error'
     | 'dev'
     | 'disabled'
@@ -245,6 +247,8 @@ export interface ProduceBatchRequest {
   localSchemaId?: number
   /** Fixed partition for all messages; omit for broker default (key / round-robin) */
   partition?: number
+  /** Same headers on every message; omit or {} → no headers */
+  headers?: Record<string, string>
   messages: Array<{ key?: string; value: string }>
 }
 

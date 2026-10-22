@@ -108,7 +108,7 @@ export default function TailPanel({
   }
 
   return (
-    <section className="messages">
+    <section className="messages drag-scroll">
       <div className="panel" style={{ marginBottom: '0.9rem' }}>
         <div className="messages-panel-head">
           <div>

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Prepends a local/portable cmake to PATH, then runs the remaining args.
+ * Prepends cmake + node_modules/.bin to PATH, then runs the remaining args.
  * Used by tauri:dev / tauri:build so rdkafka-sys can compile without Homebrew.
  */
 import { spawn, spawnSync } from 'node:child_process'
@@ -9,13 +9,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const candidates = [
+
+/** Project-local / known good locations first; PATH next; avoid stale /usr/local cmake. */
+const localCandidates = [
   path.join(root, 'src-tauri/.tools/cmake/bin/cmake'),
   path.join(root, 'src-tauri/.tools/cmake-3.31.6-macos-universal/CMake.app/Contents/bin/cmake'),
   '/tmp/cmake-3.31.6-macos-universal/CMake.app/Contents/bin/cmake',
   '/opt/homebrew/bin/cmake',
-  '/usr/local/bin/cmake',
-  '/usr/bin/cmake',
 ]
 
 function findCmakeOnPath() {
@@ -27,14 +27,24 @@ function findCmakeOnPath() {
 }
 
 function findCmake() {
-  for (const p of candidates) {
+  for (const p of localCandidates) {
     try {
       if (fs.existsSync(p) && fs.statSync(p).isFile()) return p
     } catch {
       /* ignore */
     }
   }
-  return findCmakeOnPath()
+  const fromPath = findCmakeOnPath()
+  if (fromPath) return fromPath
+  // Last resorts
+  for (const p of ['/usr/bin/cmake', '/usr/local/bin/cmake']) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p
+    } catch {
+      /* ignore */
+    }
+  }
+  return null
 }
 
 const cmake = findCmake()
@@ -56,10 +66,14 @@ Then re-run: npm run tauri:dev
   process.exit(1)
 }
 
+console.log(`with-cmake: using ${cmake}`)
+
 const binDir = path.dirname(cmake)
+const npmBin = path.join(root, 'node_modules', '.bin')
+const pathParts = [binDir, npmBin, process.env.PATH || ''].filter(Boolean)
 const env = {
   ...process.env,
-  PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+  PATH: pathParts.join(path.delimiter),
   CMAKE: cmake,
 }
 
@@ -73,6 +87,11 @@ const child = spawn(args[0], args.slice(1), {
   env,
   stdio: 'inherit',
   shell: process.platform === 'win32',
+})
+child.on('error', (err) => {
+  console.error(`Failed to spawn ${args[0]}: ${err.message}`)
+  console.error(`PATH=${env.PATH}`)
+  process.exit(1)
 })
 child.on('exit', (code, signal) => {
   if (signal) process.kill(process.pid, signal)

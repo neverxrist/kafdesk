@@ -68,6 +68,8 @@ export function installTauriKafdesk(): void {
     updateStatus: () => invoke('app_update_status'),
     updateSettings: () => invoke('app_update_settings'),
     setAutoUpdate: (enabled: boolean) => invoke('app_set_auto_update', { enabled }),
+    openDownloadedUpdate: () => invoke('app_open_downloaded_update'),
+    openReleases: () => invoke('app_open_releases'),
     getVersion: () => invoke('app_get_version'),
     onUpdateStatus: (cb: (s: UpdateStatus) => void) => {
       let un: UnlistenFn | undefined

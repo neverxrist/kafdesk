@@ -60,6 +60,8 @@ pub fn run() {
             commands::app_update_status,
             commands::app_update_settings,
             commands::app_set_auto_update,
+            commands::app_open_downloaded_update,
+            commands::app_open_releases,
             commands::app_get_version,
         ])
         .run(tauri::generate_context!())

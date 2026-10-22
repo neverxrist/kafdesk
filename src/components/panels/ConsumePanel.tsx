@@ -424,6 +424,7 @@ export default function ConsumePanel({
   onToggleDiff,
   onClearDiff,
   onRepublish,
+  onOpenConsumerGroup,
 }: {
   tr: Tr
   topicDetails: TopicInfo | null
@@ -439,6 +440,7 @@ export default function ConsumePanel({
   onToggleDiff: (m: KafkaMessageView) => void
   onClearDiff: () => void
   onRepublish: (m: KafkaMessageView) => void
+  onOpenConsumerGroup?: (groupId: string) => void
 }) {
   const [hiddenPartitions, setHiddenPartitions] = useState<Set<number>>(() => new Set())
   const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
@@ -525,13 +527,14 @@ export default function ConsumePanel({
           collapse: tr('collapse'),
           copyValue: tr('copyValue'),
           copied: tr('copied'),
+          headers: tr('msgHeaders'),
         }}
       />
     )
   }
 
   return (
-    <section className="messages">
+    <section className="messages drag-scroll">
       {topicDetails && (
         <div className="panel messages-topic-panel">
           <div className="messages-panel-head">
@@ -577,20 +580,22 @@ export default function ConsumePanel({
                 </div>
               </div>
               {topicGroupLags != null && (
-                <div className="topic-lag-row" title={tr('topicLagLabel')}>
-                  <span className="topic-lag-label">{tr('topicLagLabel')}</span>
+                <div className="topic-lag-row" title={tr('topicConsumersLabel')}>
+                  <span className="topic-lag-label">{tr('topicConsumersLabel')}</span>
                   {topicGroupLags.length === 0 ? (
                     <span className="topic-lag-empty">{tr('topicLagNone')}</span>
                   ) : (
                     topicGroupLags.map((g) => (
-                      <span
+                      <button
                         key={g.groupId}
+                        type="button"
                         className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
-                        title={`${g.groupId}: ${g.totalLag}`}
+                        title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
+                        onClick={() => onOpenConsumerGroup?.(g.groupId)}
                       >
                         <em>{g.groupId}</em>
                         <strong>{g.totalLag}</strong>
-                      </span>
+                      </button>
                     ))
                   )}
                 </div>

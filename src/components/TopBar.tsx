@@ -23,6 +23,35 @@ function SidebarPanelIcon() {
   )
 }
 
+/** Shown in dark mode — click switches to light. */
+function SunIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+/** Shown in light mode — click switches to dark. */
+function MoonIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M13.2 9.1A5.4 5.4 0 0 1 6.9 2.8 5.6 5.6 0 1 0 13.2 9.1Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 export type AppTab = 'consume' | 'produce' | 'groups' | 'tail' | 'logs' | 'settings'
 
 export default function TopBar({
@@ -31,7 +60,7 @@ export default function TopBar({
   toggleTheme,
   toggleLocale,
   setSidebarOpen,
-  onOpenSettings,
+  onToggleSettings,
   settingsActive,
   connections,
   activeId,
@@ -52,7 +81,7 @@ export default function TopBar({
   toggleTheme: () => void
   toggleLocale: () => void
   setSidebarOpen: (v: boolean | ((prev: boolean) => boolean)) => void
-  onOpenSettings: () => void
+  onToggleSettings: () => void
   settingsActive?: boolean
   connections: ClusterConfig[]
   activeId: string
@@ -219,18 +248,24 @@ export default function TopBar({
       <div className="topbar-controls">
         <button
           className={`icon-btn settings-btn ${settingsActive ? 'active' : ''}`}
-          onClick={onOpenSettings}
+          onClick={onToggleSettings}
           type="button"
           title={tr('settings')}
           aria-label={tr('settings')}
         >
           ⚙
         </button>
-        <button className="icon-btn" onClick={toggleLocale} type="button" title="Language">
+        <button className="icon-btn" onClick={toggleLocale} type="button" title={tr('language')}>
           {tr('langSwitch')}
         </button>
-        <button className="icon-btn" onClick={toggleTheme} type="button" title="Theme">
-          {theme === 'dark' ? tr('themeLight') : tr('themeDark')}
+        <button
+          className="icon-btn theme-btn"
+          onClick={toggleTheme}
+          type="button"
+          title={theme === 'dark' ? tr('themeLight') : tr('themeDark')}
+          aria-label={theme === 'dark' ? tr('themeLight') : tr('themeDark')}
+        >
+          {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
         </button>
       </div>
     </div>

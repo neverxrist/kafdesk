@@ -7,6 +7,13 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
+/** macOS smart quotes («» “”) break JSON — force ASCII quotes. */
+export function normalizeStraightQuotes(s: string): string {
+  return s
+    .replace(/[\u00AB\u00BB\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2018\u2019\u2039\u203A]/g, "'")
+}
+
 export function expandProduceTemplate(template: string, index: number): string {
   const now = new Date()
   const map: Record<string, string> = {
@@ -23,7 +30,8 @@ export function expandProduceTemplate(template: string, index: number): string {
     rand: String(Math.floor(Math.random() * 1_000_000)),
   }
 
-  return template.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_, key: string) => {
+  const body = normalizeStraightQuotes(template)
+  return body.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_, key: string) => {
     return map[key] ?? map[key.toLowerCase()] ?? `{{${key}}}`
   })
 }

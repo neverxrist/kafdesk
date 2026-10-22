@@ -80,6 +80,7 @@ export default function MessageCard({
     collapse: string
     copyValue: string
     copied: string
+    headers?: string
   }
 }) {
   const headerEntries = Object.entries(m.headers || {})
@@ -139,12 +140,32 @@ export default function MessageCard({
     setExpanded((v) => !v)
   }
 
+  const headersBlock =
+    headerEntries.length > 0 ? (
+      <div className="msg-headers" aria-label={labels?.headers ?? 'Headers'}>
+        <span className="msg-headers-label">{labels?.headers ?? 'Headers'}</span>
+        <dl className="msg-headers-list">
+          {headerEntries.map(([k, v]) => (
+            <div key={k} className="msg-header-row">
+              <dt title={k}>{k}</dt>
+              <dd title={v}>{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    ) : null
+
   const metaRight = (
     <span className="msg-head-right">
       <span className="msg-chip">p{m.partition}</span>
       <span className="msg-chip msg-offset">
         offset <strong>{m.offset}</strong>
       </span>
+      {headerEntries.length > 0 && (
+        <span className="msg-chip msg-headers-chip" title={labels?.headers ?? 'Headers'}>
+          hdr <strong>{headerEntries.length}</strong>
+        </span>
+      )}
       <span className="msg-datetime">{when ?? ''}</span>
       <span className={`badge ${m.format}`} title={`Detected type: ${m.format}`}>
         {formatBadgeLabel(m.format, m.schemaId)}
@@ -182,20 +203,23 @@ export default function MessageCard({
           {metaRight}
         </button>
         {expanded && (
-          <div className="msg-body-wrap msg-compact-body">
-            {labels?.copyValue && (
-              <button
-                type="button"
-                className={`msg-copy${copied ? ' is-copied' : ''}`}
-                title={copied ? labels.copied : labels.copyValue}
-                aria-label={copied ? labels.copied : labels.copyValue}
-                onClick={(e) => void copyBody(e)}
-              >
-                {copied ? <CheckIcon /> : <CopyIcon />}
-              </button>
-            )}
-            <pre className="msg-body">{highlighted}</pre>
-          </div>
+          <>
+            {headersBlock}
+            <div className="msg-body-wrap msg-compact-body">
+              {labels?.copyValue && (
+                <button
+                  type="button"
+                  className={`msg-copy${copied ? ' is-copied' : ''}`}
+                  title={copied ? labels.copied : labels.copyValue}
+                  aria-label={copied ? labels.copied : labels.copyValue}
+                  onClick={(e) => void copyBody(e)}
+                >
+                  {copied ? <CheckIcon /> : <CopyIcon />}
+                </button>
+              )}
+              <pre className="msg-body">{highlighted}</pre>
+            </div>
+          </>
         )}
       </article>
     )
@@ -239,15 +263,7 @@ export default function MessageCard({
           )}
         </div>
       )}
-      {headerEntries.length > 0 && (
-        <div className="msg-headers">
-          {headerEntries.map(([k, v]) => (
-            <span key={k} className="chip">
-              {k}={v}
-            </span>
-          ))}
-        </div>
-      )}
+      {headersBlock}
       <div className={`msg-body-wrap${showFullBody ? '' : ' is-collapsed'}`}>
         {labels?.copyValue && (
           <button

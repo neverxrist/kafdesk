@@ -30,12 +30,10 @@ pub struct ConsumeWindowInput {
 #[derive(Debug, Clone)]
 pub struct ConsumeWindowPlan {
     pub limit: i32,
-    pub start_from: String,
     pub has_filter: bool,
     pub wait_ms: u64,
     pub idle_ms: u64,
     pub target_partitions: Vec<i32>,
-    pub approx_available: i64,
     pub seek_plan: Vec<(i32, i64)>,
     pub planned_start: HashMap<i32, i64>,
     pub empty: bool,
@@ -82,12 +80,10 @@ pub fn plan_consume_window(input: ConsumeWindowInput) -> ConsumeWindowPlan {
     if approx_available == 0 && start_from != "offset" {
         return ConsumeWindowPlan {
             limit,
-            start_from,
             has_filter,
             wait_ms,
             idle_ms,
             target_partitions,
-            approx_available,
             seek_plan,
             planned_start,
             empty: true,
@@ -173,12 +169,10 @@ pub fn plan_consume_window(input: ConsumeWindowInput) -> ConsumeWindowPlan {
     let empty = target_partitions.is_empty() || finished_empty >= target_partitions.len();
     ConsumeWindowPlan {
         limit,
-        start_from,
         has_filter,
         wait_ms,
         idle_ms,
         target_partitions,
-        approx_available,
         seek_plan,
         planned_start,
         empty,

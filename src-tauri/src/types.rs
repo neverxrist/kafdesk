@@ -215,6 +215,9 @@ pub struct ProduceBatchRequest {
     pub local_schema_id: Option<i32>,
     #[serde(default)]
     pub partition: Option<i32>,
+    /// Same headers attached to every message in the batch (optional).
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
     pub messages: Vec<ProduceBatchItem>,
 }
 
