@@ -42,6 +42,11 @@ import {
 } from '../lib/produceHeaders'
 import { guessAvroSubject, messageBodyText, messageId } from '../lib/messageText'
 import { stripIpcError } from '../lib/ipcError'
+import {
+  brokersFromHostPort,
+  DEFAULT_BROKER_PORT,
+  hostPortFromBrokers,
+} from '../lib/brokerEndpoint'
 import type { AppLogEntry } from './useAppLogs'
 import { useConsumeFilters, type ConsumeFilterState } from './useConsumeFilters'
 
@@ -60,7 +65,15 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   })
 
   const config = connections.find((c) => c.id === activeId) ?? connections[0]
-  const [brokersText, setBrokersText] = useState(config?.brokers.join(',') ?? '')
+  const initialBrokers = hostPortFromBrokers(config?.brokers ?? [])
+  const [brokerHost, setBrokerHost] = useState(initialBrokers.hosts)
+  const [brokerPort, setBrokerPort] = useState(initialBrokers.port || DEFAULT_BROKER_PORT)
+
+  function syncBrokerFields(brokers: string[]) {
+    const next = hostPortFromBrokers(brokers)
+    setBrokerHost(next.hosts)
+    setBrokerPort(next.port || DEFAULT_BROKER_PORT)
+  }
 
   const [connected, setConnected] = useState(false)
   const [srStatus, setSrStatus] = useState<SchemaRegistryStatus>('none')
@@ -195,7 +208,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   useEffect(() => {
     if (!config) return
-    setBrokersText(config.brokers.join(','))
+    syncBrokerFields(config.brokers)
   }, [activeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -374,7 +387,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       await disconnect()
     }
     setActiveId(id)
-    setBrokersText(next.brokers.join(','))
+    syncBrokerFields(next.brokers)
     // One live Kafka session only — drop old, reconnect to the chosen profile
     if (wasConnected) {
       await connectWith(next)
@@ -450,7 +463,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       fresh.name = 'New connection'
       setConnections([fresh])
       setActiveId(fresh.id)
-      setBrokersText(fresh.brokers.join(','))
+      syncBrokerFields(fresh.brokers)
       if (connected) void disconnect()
       pushLog('warn', `Удалён единственный коннект «${target.name}», создан пустой «New connection»`)
       setPingInfo(`«${target.name}» удалён`)
@@ -551,10 +564,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   function draftConfig(): ClusterConfig {
     return {
       ...config!,
-      brokers: brokersText
-        .split(',')
-        .map((b) => b.trim())
-        .filter(Boolean),
+      brokers: brokersFromHostPort(brokerHost, brokerPort),
     }
   }
 
@@ -562,34 +572,57 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setBusy(true)
     setError(null)
     setPingInfo(null)
+    let connectTimeout: ReturnType<typeof setTimeout> | undefined
     try {
       setConnections((prev) => prev.map((c) => (c.id === target.id ? target : c)))
-      const res = await window.kafdesk.connect(target)
+      const res = await Promise.race([
+        window.kafdesk.connect(target),
+        new Promise<never>((_, reject) => {
+          connectTimeout = setTimeout(() => {
+            reject(new Error('Connect timed out (20s). Check brokers / VPN / DNS, then retry.'))
+          }, 20_000)
+        }),
+      ])
+      if (connectTimeout) clearTimeout(connectTimeout)
       setConnected(true)
       setSrStatus(res.schemaRegistry)
       if (res.schemaRegistry === 'fail' && res.schemaRegistryError) {
         setPingInfo(`SR fail: ${res.schemaRegistryError}`)
       }
-      const list = await window.kafdesk.listTopics()
-      setTopics(list)
-      void enrichTopicApprox(list)
-      if (res.schemaRegistry === 'ok') {
-        try {
-          setSubjects((await window.kafdesk.listSubjects()).sort())
-        } catch {
+      if (res.brokerDnsWarning) {
+        // Soft note only — do not open Connection error modal with DNS howto.
+        setPingInfo(res.brokerDnsWarning)
+        pushLog('warn', res.brokerDnsWarning)
+      }
+      // Unlock Disconnect immediately — topic/SR catalog must not pin the UI busy.
+      setBusy(false)
+      pushLog('info', `Connected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
+      try {
+        const list = await window.kafdesk.listTopics()
+        setTopics(list)
+        void enrichTopicApprox(list)
+        if (res.schemaRegistry === 'ok') {
+          try {
+            setSubjects((await window.kafdesk.listSubjects()).sort())
+          } catch {
+            setSubjects([])
+          }
+        } else {
           setSubjects([])
         }
-      } else {
-        setSubjects([])
+      } catch (err) {
+        const msg = stripIpcError(err instanceof Error ? err.message : String(err))
+        setError(msg)
+        pushLog('error', `Connected, but catalog failed: ${msg}`)
       }
-      // Keep connections drawer open — user closes it explicitly.
-      pushLog('info', `Connected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
     } catch (err) {
+      if (connectTimeout) clearTimeout(connectTimeout)
       const msg = stripIpcError(err instanceof Error ? err.message : String(err))
       setError(msg)
       pushLog('error', `Connect failed: ${msg}`)
       await abandonConnection()
     } finally {
+      if (connectTimeout) clearTimeout(connectTimeout)
       setBusy(false)
     }
   }
@@ -659,33 +692,58 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
       const target = draftConfig()
       setConnections((prev) => prev.map((c) => (c.id === target.id ? target : c)))
-      const res = await window.kafdesk.connect(target)
+      let connectTimeout: ReturnType<typeof setTimeout> | undefined
+      const res = await Promise.race([
+        window.kafdesk.connect(target),
+        new Promise<never>((_, reject) => {
+          connectTimeout = setTimeout(() => {
+            reject(new Error('Reconnect timed out (20s). Check brokers / VPN / DNS, then retry.'))
+          }, 20_000)
+        }),
+      ]).finally(() => {
+        if (connectTimeout) clearTimeout(connectTimeout)
+      })
       setConnected(true)
       setSrStatus(res.schemaRegistry)
       if (res.schemaRegistry === 'fail' && res.schemaRegistryError) {
         setPingInfo(`SR fail: ${res.schemaRegistryError}`)
       }
-      const list = await window.kafdesk.listTopics()
-      setTopics(list)
-      void enrichTopicApprox(list)
-      if (res.schemaRegistry === 'ok') {
-        try {
-          setSubjects((await window.kafdesk.listSubjects()).sort())
-        } catch {
+      if (res.brokerDnsWarning) {
+        setPingInfo(res.brokerDnsWarning)
+        pushLog('warn', res.brokerDnsWarning)
+      }
+      setBusy(false)
+      pushLog('info', `Reconnected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
+      try {
+        const list = await window.kafdesk.listTopics()
+        setTopics(list)
+        void enrichTopicApprox(list)
+        if (res.schemaRegistry === 'ok') {
+          try {
+            setSubjects((await window.kafdesk.listSubjects()).sort())
+          } catch {
+            setSubjects([])
+          }
+        } else {
           setSubjects([])
         }
-      } else {
-        setSubjects([])
-      }
-      if (keepTopic && list.some((t) => t.name === keepTopic)) {
-        setSelectedTopic(keepTopic)
-      } else {
+        if (keepTopic && list.some((t) => t.name === keepTopic)) {
+          setSelectedTopic(keepTopic)
+        } else {
+          setSelectedTopic(null)
+          setTopicDetails(null)
+          setTopicGroupLags(null)
+          setMessages([])
+        }
+      } catch (err) {
+        const msg = stripIpcError(err instanceof Error ? err.message : String(err))
+        setError(msg)
+        pushLog('error', `Reconnected, but catalog failed: ${msg}`)
         setSelectedTopic(null)
         setTopicDetails(null)
         setTopicGroupLags(null)
         setMessages([])
       }
-      pushLog('info', `Reconnected to ${target.brokers.join(',')} (${target.authMode || 'none'})`)
     } catch (err) {
       const msg = stripIpcError(err instanceof Error ? err.message : String(err))
       setError(msg)
@@ -697,14 +755,25 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function disconnect() {
-    setBusy(true)
     enrichGenRef.current += 1
+    setBusy(true)
     try {
-      if (tailing) await window.kafdesk.tailStop()
-      await window.kafdesk.disconnect()
+      if (tailing) {
+        try {
+          await window.kafdesk.tailStop()
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        await window.kafdesk.disconnect()
+      } catch {
+        /* force UI offline even if IPC is wedged */
+      }
       setConnected(false)
       setSrStatus('none')
       setTopics([])
+      setSubjects([])
       setSelectedTopic(null)
       setTopicDetails(null)
       setTopicGroupLags(null)
@@ -717,6 +786,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setTailMessages([])
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      setConnected(false)
     } finally {
       setBusy(false)
     }
@@ -752,8 +822,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
           await abandonConnection()
         }
       } else if (res.kafka.ok) {
-        // Stay offline — probe only. Make that explicit so "offline" ≠ "unreachable".
-        setPingInfo(`OK (not connected) · ${kafkaPart} · ${srPart}`)
+        // Probe only — does not leave a live session. Point at Connect explicitly.
+        setPingInfo(`Reachable · ${kafkaPart} · ${srPart} — press Connect`)
       } else {
         setPingInfo(`unreachable · ${kafkaPart} · ${srPart}`)
       }
@@ -770,7 +840,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   async function enrichTopicApprox(list: TopicInfo[]) {
     if (!window.kafdesk?.getTopicOffsets || list.length === 0) return
     const gen = ++enrichGenRef.current
-    const concurrency = 6
+    // One at a time: each offsets call briefly owns the Kafka session.
+    const concurrency = 1
     let cursor = 0
     const merged = new Map<string, TopicInfo>()
 
@@ -809,6 +880,10 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function selectTopic(name: string) {
+    // Stop background watermark enrich so it does not steal the Kafka session.
+    enrichGenRef.current += 1
+    // Invalidate in-flight consume so a detach race does not look like a dead session.
+    consumeGenRef.current += 1
     setSelectedTopic(name)
     setProducePartition(null)
     selectedTopicRef.current = name
@@ -819,13 +894,26 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTopicGroupLags(null)
     setError(null)
     resetPartitionToAll()
-    setBusy(true)
     try {
       if (tailing) {
         await window.kafdesk.tailStop()
         setTailing(false)
       }
-      const details = await window.kafdesk.getTopicOffsets(name)
+      // Brief retry: previous consume may still hold the detached session for a moment.
+      let details: TopicInfo | null = null
+      let lastErr = ''
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (selectedTopicRef.current !== name) return
+        try {
+          details = await window.kafdesk.getTopicOffsets(name)
+          break
+        } catch (err) {
+          lastErr = stripIpcError(err instanceof Error ? err.message : String(err))
+          if (!/not connected to kafka/i.test(lastErr) || attempt === 3) throw err
+          await new Promise((r) => setTimeout(r, 150 + attempt * 150))
+        }
+      }
+      if (!details) throw new Error(lastErr || 'Not connected to Kafka')
       if (selectedTopicRef.current !== name) return
       setTopicDetails(details)
       setTopics((prev) =>
@@ -835,23 +923,29 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
             : t,
         ),
       )
-      // Auto-load recent messages for the opened topic (all partitions)
-      await loadMessages(name, { ...filterStateRef.current, partitionFilter: 'all' })
-      void window.kafdesk
-        .getLagSummary?.(name)
-        .then((res) => {
-          if (selectedTopicRef.current !== name) return
-          setTopicGroupLags(
-            res.groups.map((g) => ({ groupId: g.groupId, totalLag: g.totalLag })),
-          )
-        })
-        .catch(() => {
-          if (selectedTopicRef.current === name) setTopicGroupLags(null)
-        })
+      // Do not await — previous topic's consume / lag must not block switching.
+      void loadMessages(name, { ...filterStateRef.current, partitionFilter: 'all' }, details)
+      // Lag is best-effort and slow (GroupCoordinator); never block topic UX on it.
+      const lagTopic = name
+      window.setTimeout(() => {
+        if (selectedTopicRef.current !== lagTopic) return
+        void window.kafdesk
+          .getLagSummary?.(lagTopic)
+          .then((res) => {
+            if (selectedTopicRef.current !== lagTopic) return
+            setTopicGroupLags(
+              res.groups.map((g) => ({ groupId: g.groupId, totalLag: g.totalLag })),
+            )
+          })
+          .catch(() => {
+            if (selectedTopicRef.current === lagTopic) setTopicGroupLags(null)
+          })
+      }, 0)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
+      const msg = stripIpcError(err instanceof Error ? err.message : String(err))
+      setError(msg)
+      setLoadingMessages(false)
+      // Do not abandon on "Not connected" here — brief races must not look like logout.
     }
   }
 
@@ -903,10 +997,16 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     persistSavedQueries(next)
   }
 
-  async function loadMessages(topicName?: string, filterOverride?: ConsumeFilterState) {
+  async function loadMessages(
+    topicName?: string,
+    filterOverride?: ConsumeFilterState,
+    offsetsFrom?: TopicInfo | null,
+  ) {
     // Guard: never treat a click event (or other non-string) as a topic name
     const topic = (typeof topicName === 'string' && topicName) || selectedTopic
     if (!topic) return
+    // Prefer consume over background topic-size enrich (they share one Kafka session).
+    enrichGenRef.current += 1
     cancelScheduledConsumeReload()
     const f = filterOverride ?? { ...filterStateRef.current }
     const gen = ++consumeGenRef.current
@@ -914,28 +1014,63 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setError(null)
     // Clear immediately so switching beginning/end doesn't keep stale rows
     setMessages([])
+    let uiTimeout: ReturnType<typeof setTimeout> | undefined
     try {
       if (tailing) {
         await window.kafdesk.tailStop()
         setTailing(false)
       }
+      const details = offsetsFrom ?? topicDetails
+      const partitionWatermarks =
+        details?.name === topic
+          ? details.partitions
+              .map((p) => {
+                const low = p.offsetLow != null ? Number(p.offsetLow) : NaN
+                const high = p.offsetHigh != null ? Number(p.offsetHigh) : NaN
+                if (!Number.isFinite(low) || !Number.isFinite(high)) return null
+                return { partition: p.partitionId, low, high }
+              })
+              .filter((x): x is { partition: number; low: number; high: number } => x != null)
+          : undefined
+
       // Window only — search/key/headers/time filter client-side on `messages`.
-      const rows = await window.kafdesk.consume({
-        topic,
-        startFrom: f.startFrom,
-        startOffset: f.startFrom === 'offset' ? f.startOffset : undefined,
-        limit: f.limit,
-        partitions: partitionsForFilter(f.partitionFilter),
-      })
+      // Hard UI cap: never leave the empty-state spinner forever if IPC wedges.
+      const rows = await Promise.race([
+        window.kafdesk.consume({
+          topic,
+          startFrom: f.startFrom,
+          startOffset: f.startFrom === 'offset' ? f.startOffset : undefined,
+          limit: f.limit,
+          partitions: partitionsForFilter(f.partitionFilter),
+          partitionWatermarks:
+            partitionWatermarks && partitionWatermarks.length > 0
+              ? partitionWatermarks
+              : undefined,
+        }),
+        new Promise<never>((_, reject) => {
+          uiTimeout = setTimeout(() => {
+            reject(
+              new Error(
+                'Consume timed out (20s). Check broker reachability, DNS for advertised listeners, or consumer-group ACL.',
+              ),
+            )
+          }, 20_000)
+        }),
+      ])
       // Ignore stale responses if a newer filter/topic request already started
       if (selectedTopicRef.current === topic && consumeGenRef.current === gen) {
         setMessages(rows)
       }
     } catch (err) {
       if (consumeGenRef.current === gen) {
-        setError(err instanceof Error ? err.message : String(err))
+        const msg = stripIpcError(err instanceof Error ? err.message : String(err))
+        // Ignore stale UI-timeout / errors after the user already switched topic.
+        if (selectedTopicRef.current === topic) {
+          setError(msg)
+        }
       }
     } finally {
+      if (uiTimeout) clearTimeout(uiTimeout)
       if (consumeGenRef.current === gen) {
         setLoadingMessages(false)
       }
@@ -1268,8 +1403,10 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     pendingDeleteId,
     authMethod,
     authSession,
-    brokersText,
-    setBrokersText,
+    brokerHost,
+    setBrokerHost,
+    brokerPort,
+    setBrokerPort,
     connected,
     srStatus,
     busy,

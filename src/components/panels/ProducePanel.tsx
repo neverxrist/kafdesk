@@ -16,6 +16,19 @@ function prettySchema(schema: string): string {
   }
 }
 
+function ClearValueIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path
+        d="M3.2 3.2 10.8 10.8M10.8 3.2 3.2 10.8"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 export default function ProducePanel({
   tr,
   selectedTopic,
@@ -387,28 +400,33 @@ export default function ProducePanel({
               ? ` ${tr('valueMatchingSchema')}`
               : ''}
           </label>
-          <textarea
-            className="produce-value"
-            value={produceValue}
-            spellCheck={false}
-            autoCorrect="off"
-            autoCapitalize="off"
-            onChange={(e) => setProduceValue(normalizeStraightQuotes(e.target.value))}
-          />
-          <div className="produce-schema-actions">
-            {(produceFormat === 'avro' || produceFormat === 'avro-local') && (
+          <div className="produce-value-wrap">
+            <textarea
+              className="produce-value"
+              value={produceValue}
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
+              onChange={(e) => setProduceValue(normalizeStraightQuotes(e.target.value))}
+            />
+            <button
+              type="button"
+              className="produce-value-clear"
+              disabled={busy || !produceValue}
+              onClick={() => setProduceValue('')}
+              title={tr('clear')}
+              aria-label={tr('clear')}
+            >
+              <ClearValueIcon />
+            </button>
+          </div>
+          {(produceFormat === 'avro' || produceFormat === 'avro-local') && (
+            <div className="produce-schema-actions">
               <button type="button" disabled={busy || !canGenerate} onClick={onGenerateFromSchema}>
                 {tr('generateFromSchema')}
               </button>
-            )}
-            <button
-              type="button"
-              disabled={busy || !produceValue}
-              onClick={() => setProduceValue('')}
-            >
-              {tr('clear')}
-            </button>
-          </div>
+            </div>
+          )}
         </div>
         <div className="produce-send-row">
           <button

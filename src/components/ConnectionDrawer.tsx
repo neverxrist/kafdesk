@@ -17,8 +17,10 @@ export default function ConnectionDrawer({
   pendingDeleteId,
   config,
   authMethod,
-  brokersText,
-  setBrokersText,
+  brokerHost,
+  setBrokerHost,
+  brokerPort,
+  setBrokerPort,
   connected,
   srStatus,
   busy,
@@ -48,8 +50,10 @@ export default function ConnectionDrawer({
   pendingDeleteId: string | null
   config: ClusterConfig
   authMethod: AuthMethodUi
-  brokersText: string
-  setBrokersText: (v: string) => void
+  brokerHost: string
+  setBrokerHost: (v: string) => void
+  brokerPort: string
+  setBrokerPort: (v: string) => void
   connected: boolean
   srStatus: SchemaRegistryStatus
   busy: boolean
@@ -75,16 +79,32 @@ export default function ConnectionDrawer({
   const hasSrAuth = Boolean(
     config.schemaRegistryAuth?.username?.trim() || config.schemaRegistryAuth?.password,
   )
+  const tls = config.schemaRegistryTls
+  const hasTls = Boolean(
+    tls?.caPath?.trim() ||
+      tls?.certPath?.trim() ||
+      tls?.keyPath?.trim() ||
+      tls?.rejectUnauthorized === false,
+  )
+  const [tlsOpen, setTlsOpen] = useState(false)
   const [srOpen, setSrOpen] = useState(false)
 
   const nameOk = Boolean(config.name?.trim())
-  const brokersOk = Boolean(brokersText.trim())
+  const hostOk = Boolean(brokerHost.trim())
+  const portOk = Boolean(brokerPort.trim().replace(/\D/g, ''))
+  const brokersOk = hostOk && portOk
   const saslUserOk = authMethod !== 'sasl' || Boolean(config.sasl?.username?.trim())
   const saslPassOk = authMethod !== 'sasl' || Boolean(config.sasl?.password)
-  // URL is required once the SR panel is open or a URL was already saved
-  const srUrlNeeded = srOpen || hasSr
-  const srUrlOk = !srUrlNeeded || Boolean(config.schemaRegistryUrl?.trim())
-  const canConnect = nameOk && brokersOk && saslUserOk && saslPassOk && srUrlOk
+  // SR is optional — opening the panel must not block Connect
+  const canConnect = nameOk && brokersOk && saslUserOk && saslPassOk
+
+  const tlsMeta = tls?.caPath?.trim()
+    ? tr('tlsToggleCa')
+    : hasTls
+      ? tr('tlsToggleCustom')
+      : config.ssl
+        ? tr('tlsToggleSslHint')
+        : tr('tlsToggleOff')
 
   const srMeta =
     srStatus === 'ok'
@@ -98,7 +118,8 @@ export default function ConnectionDrawer({
             : tr('srToggleOff')
 
   useEffect(() => {
-    // Keep panel closed when switching connections; reopen only on demand
+    // Keep panels closed when switching connections; reopen only on demand
+    setTlsOpen(false)
     setSrOpen(false)
   }, [config.id])
 
@@ -274,23 +295,37 @@ export default function ConnectionDrawer({
             </div>
           </div>
 
-          <div className={`field ${brokersOk ? '' : 'field-missing'}`.trim()}>
-            <div className="field-label-row">
-              {reqLabel(tr('brokers'), brokersOk)}
-              <label className={`ssl-toggle${config.ssl ? ' on' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(config.ssl)}
-                  onChange={(e) => onUpdateConfig({ ssl: e.target.checked })}
-                />
-                {tr('ssl')}
-              </label>
+          <div className="broker-host-port-row">
+            <div className={`field broker-host-field ${hostOk ? '' : 'field-missing'}`.trim()}>
+              <div className="field-label-row">
+                {reqLabel(tr('brokerHost'), hostOk)}
+                <label className={`ssl-toggle${config.ssl ? ' on' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(config.ssl)}
+                    onChange={(e) => onUpdateConfig({ ssl: e.target.checked })}
+                  />
+                  {tr('ssl')}
+                </label>
+              </div>
+              <input
+                value={brokerHost}
+                onChange={(e) => setBrokerHost(e.target.value)}
+                placeholder={tr('brokerHostPh')}
+                aria-required
+                title={tr('brokerHostsHint')}
+              />
             </div>
-            <input
-              value={brokersText}
-              onChange={(e) => setBrokersText(e.target.value)}
-              aria-required
-            />
+            <div className={`field broker-port-field ${portOk ? '' : 'field-missing'}`.trim()}>
+              {reqLabel(tr('brokerPort'), portOk)}
+              <input
+                value={brokerPort}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                onChange={(e) => setBrokerPort(e.target.value.replace(/[^\d]/g, '').slice(0, 5))}
+                aria-required
+              />
+            </div>
           </div>
 
           {authMethod === 'sasl' && (
@@ -355,6 +390,117 @@ export default function ConnectionDrawer({
           <div className="sr-fold">
             <button
               type="button"
+              className={`sr-fold-toggle ${hasTls ? 'has-sr' : ''}`}
+              onClick={() => setTlsOpen((v) => !v)}
+              aria-expanded={tlsOpen}
+            >
+              <span>{tr('tlsToggle')}</span>
+              <span className="sr-fold-meta">
+                {tlsMeta}
+                <span className="sr-fold-chevron">{tlsOpen ? '▴' : '▾'}</span>
+              </span>
+            </button>
+            {hasTls && !tlsOpen && tls?.caPath && (
+              <div className="sr-fold-summary" title={tls.caPath}>
+                {tls.caPath}
+              </div>
+            )}
+            {tlsOpen && (
+              <div className="sr-fold-body">
+                <p className="tls-fold-hint">{tr('tlsHint')}</p>
+                <div className="field">
+                  <label>{tr('tlsCa')}</label>
+                  <PathBrowseInput
+                    value={tls?.caPath || ''}
+                    onChange={(caPath) =>
+                      onUpdateConfig({
+                        schemaRegistryTls: { ...config.schemaRegistryTls, caPath },
+                      })
+                    }
+                    onBrowse={async () => {
+                      const p = await window.kafdesk.pickPemFile?.()
+                      if (p)
+                        onUpdateConfig({
+                          schemaRegistryTls: { ...config.schemaRegistryTls, caPath: p },
+                        })
+                    }}
+                    placeholder={tr('tlsPathPh')}
+                    browseLabel={tr('browse')}
+                  />
+                </div>
+                <div className="field">
+                  <label>{tr('tlsCert')}</label>
+                  <PathBrowseInput
+                    value={tls?.certPath || ''}
+                    onChange={(certPath) =>
+                      onUpdateConfig({
+                        schemaRegistryTls: { ...config.schemaRegistryTls, certPath },
+                      })
+                    }
+                    onBrowse={async () => {
+                      const p = await window.kafdesk.pickPemFile?.()
+                      if (p)
+                        onUpdateConfig({
+                          schemaRegistryTls: { ...config.schemaRegistryTls, certPath: p },
+                        })
+                    }}
+                    placeholder={tr('tlsPathPh')}
+                    browseLabel={tr('browse')}
+                  />
+                </div>
+                <div className="field">
+                  <label>{tr('tlsKey')}</label>
+                  <PathBrowseInput
+                    value={tls?.keyPath || ''}
+                    onChange={(keyPath) =>
+                      onUpdateConfig({
+                        schemaRegistryTls: { ...config.schemaRegistryTls, keyPath },
+                      })
+                    }
+                    onBrowse={async () => {
+                      const p = await window.kafdesk.pickPemFile?.()
+                      if (p)
+                        onUpdateConfig({
+                          schemaRegistryTls: { ...config.schemaRegistryTls, keyPath: p },
+                        })
+                    }}
+                    placeholder={tr('tlsPathPh')}
+                    browseLabel={tr('browse')}
+                  />
+                </div>
+                <div className="row">
+                  <label className="status">
+                    <input
+                      type="checkbox"
+                      checked={tls?.rejectUnauthorized === false}
+                      onChange={(e) =>
+                        onUpdateConfig({
+                          schemaRegistryTls: {
+                            ...config.schemaRegistryTls,
+                            rejectUnauthorized: !e.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    {tr('tlsInsecure')}
+                  </label>
+                </div>
+                {hasTls && (
+                  <button
+                    type="button"
+                    className="sr-clear"
+                    onClick={() => onUpdateConfig({ schemaRegistryTls: undefined })}
+                  >
+                    {tr('tlsClear')}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="sr-fold">
+            <button
+              type="button"
               className={`sr-fold-toggle ${srStatus === 'ok' ? 'has-sr' : ''} ${srStatus === 'fail' ? 'sr-fail' : ''}`}
               onClick={() => setSrOpen((v) => !v)}
               aria-expanded={srOpen}
@@ -372,12 +518,11 @@ export default function ConnectionDrawer({
             )}
             {srOpen && (
               <div className="sr-fold-body">
-                <div className={`field ${srUrlOk ? '' : 'field-missing'}`.trim()}>
-                  {reqLabel(tr('srUrl'), srUrlOk)}
+                <div className="field">
+                  <label>{tr('srUrl')}</label>
                   <input
                     value={config.schemaRegistryUrl || ''}
                     onChange={(e) => onUpdateConfig({ schemaRegistryUrl: e.target.value })}
-                    aria-required={srUrlNeeded}
                   />
                 </div>
                 <div className="field">
@@ -410,84 +555,7 @@ export default function ConnectionDrawer({
                     hideLabel={tr('hidePassword')}
                   />
                 </div>
-                <div className="field">
-                  <label>{tr('srTlsCa')}</label>
-                  <PathBrowseInput
-                    value={config.schemaRegistryTls?.caPath || ''}
-                    onChange={(caPath) =>
-                      onUpdateConfig({
-                        schemaRegistryTls: { ...config.schemaRegistryTls, caPath },
-                      })
-                    }
-                    onBrowse={async () => {
-                      const p = await window.kafdesk.pickPemFile?.()
-                      if (p)
-                        onUpdateConfig({
-                          schemaRegistryTls: { ...config.schemaRegistryTls, caPath: p },
-                        })
-                    }}
-                    placeholder={tr('srTlsPathPh')}
-                    browseLabel={tr('browse')}
-                  />
-                </div>
-                <div className="field">
-                  <label>{tr('srTlsCert')}</label>
-                  <PathBrowseInput
-                    value={config.schemaRegistryTls?.certPath || ''}
-                    onChange={(certPath) =>
-                      onUpdateConfig({
-                        schemaRegistryTls: { ...config.schemaRegistryTls, certPath },
-                      })
-                    }
-                    onBrowse={async () => {
-                      const p = await window.kafdesk.pickPemFile?.()
-                      if (p)
-                        onUpdateConfig({
-                          schemaRegistryTls: { ...config.schemaRegistryTls, certPath: p },
-                        })
-                    }}
-                    placeholder={tr('srTlsPathPh')}
-                    browseLabel={tr('browse')}
-                  />
-                </div>
-                <div className="field">
-                  <label>{tr('srTlsKey')}</label>
-                  <PathBrowseInput
-                    value={config.schemaRegistryTls?.keyPath || ''}
-                    onChange={(keyPath) =>
-                      onUpdateConfig({
-                        schemaRegistryTls: { ...config.schemaRegistryTls, keyPath },
-                      })
-                    }
-                    onBrowse={async () => {
-                      const p = await window.kafdesk.pickPemFile?.()
-                      if (p)
-                        onUpdateConfig({
-                          schemaRegistryTls: { ...config.schemaRegistryTls, keyPath: p },
-                        })
-                    }}
-                    placeholder={tr('srTlsPathPh')}
-                    browseLabel={tr('browse')}
-                  />
-                </div>
-                <div className="row">
-                  <label className="status">
-                    <input
-                      type="checkbox"
-                      checked={config.schemaRegistryTls?.rejectUnauthorized === false}
-                      onChange={(e) =>
-                        onUpdateConfig({
-                          schemaRegistryTls: {
-                            ...config.schemaRegistryTls,
-                            rejectUnauthorized: !e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    {tr('srTlsInsecure')}
-                  </label>
-                </div>
-                {hasSr && (
+                {(hasSr || hasSrAuth) && (
                   <button
                     type="button"
                     className="sr-clear"
@@ -495,7 +563,6 @@ export default function ConnectionDrawer({
                       onUpdateConfig({
                         schemaRegistryUrl: '',
                         schemaRegistryAuth: undefined,
-                        schemaRegistryTls: undefined,
                       })
                     }
                   >
@@ -532,7 +599,11 @@ export default function ConnectionDrawer({
               <ReconnectIcon />
               <span>{tr('reconnect')}</span>
             </button>
-            <button disabled={busy || !connected} onClick={onDisconnect}>
+            <button
+              disabled={!connected}
+              onClick={onDisconnect}
+              title={busy ? tr('disconnectBusy') : undefined}
+            >
               {tr('disconnect')}
             </button>
             <button disabled={busy || !canConnect} onClick={onPing}>

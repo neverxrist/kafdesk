@@ -76,6 +76,9 @@ pub struct ConnectResult {
     pub schema_registry: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema_registry_error: Option<String>,
+    /// Advertised broker DNS that does not resolve on this machine (consume will hang without /etc/hosts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub broker_dns_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,6 +172,17 @@ pub struct ConsumeRequest {
     pub time_to: Option<i64>,
     #[serde(default)]
     pub partitions: Option<Vec<i32>>,
+    /// Optional watermarks from a prior getTopicOffsets — skips a second broker round-trip.
+    #[serde(default)]
+    pub partition_watermarks: Option<Vec<PartitionWatermarkHint>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionWatermarkHint {
+    pub partition: i32,
+    pub low: i64,
+    pub high: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -32,12 +32,37 @@ pub async fn kafka_connect(
     state: State<'_, Arc<AppState>>,
     config: ClusterConfig,
 ) -> Result<ConnectResult, String> {
-    state.kafka.lock().await.connect(config).await
+    // Take the slot first so a stuck enrich (detached) cannot block reconnect forever.
+    let mut session = {
+        let mut guard = state.kafka.lock().await;
+        let mut empty = KafkaSession::new();
+        std::mem::swap(&mut *guard, &mut empty);
+        empty
+    };
+    session.disconnect().await;
+    let result = session.connect(config).await;
+    {
+        let mut guard = state.kafka.lock().await;
+        if result.is_ok() {
+            *guard = session;
+        } else {
+            // Leave slot empty on failure (already disconnected above).
+            session.disconnect().await;
+        }
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn kafka_disconnect(state: State<'_, Arc<AppState>>) -> Result<OkMsg, String> {
-    state.kafka.lock().await.disconnect().await;
+    // Swap out whatever is in the slot immediately — do not wait on a detached long op.
+    let mut session = {
+        let mut guard = state.kafka.lock().await;
+        let mut empty = KafkaSession::new();
+        std::mem::swap(&mut *guard, &mut empty);
+        empty
+    };
+    session.disconnect().await;
     Ok(OkMsg { ok: true })
 }
 
@@ -60,11 +85,26 @@ pub async fn kafka_probe(config: ClusterConfig) -> Result<PingResult, String> {
     KafkaSession::probe(config).await
 }
 
+/// Snapshot worker for read ops — never empty the live session slot (topic switch / disconnect).
+async fn with_session_worker<T, F>(state: &AppState, op: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(KafkaSession) -> Result<T, String> + Send + 'static,
+{
+    let worker = {
+        let guard = state.kafka.lock().await;
+        guard.clone_for_consume()?
+    };
+    tokio::task::spawn_blocking(move || op(worker))
+        .await
+        .map_err(|e| format!("kafka worker join: {e}"))?
+}
+
 #[tauri::command]
 pub async fn kafka_list_topics(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<TopicInfo>, String> {
-    state.kafka.lock().await.list_topics()
+    with_session_worker(&state, |session| session.list_topics()).await
 }
 
 #[tauri::command]
@@ -72,7 +112,7 @@ pub async fn kafka_get_topic_offsets(
     state: State<'_, Arc<AppState>>,
     topic: String,
 ) -> Result<TopicInfo, String> {
-    state.kafka.lock().await.get_topic_offsets(&topic)
+    with_session_worker(&state, move |session| session.get_topic_offsets(&topic)).await
 }
 
 /// Detach the live session for a long op so disconnect/ping are not blocked.
@@ -112,11 +152,19 @@ pub async fn kafka_consume(
     state: State<'_, Arc<AppState>>,
     request: ConsumeRequest,
 ) -> Result<Vec<KafkaMessageView>, String> {
-    with_session_detached(&state, |session| async move {
-        let result = session.consume(request).await;
-        (session, result)
+    let worker = {
+        let guard = state.kafka.lock().await;
+        guard.clone_for_consume()?
+    };
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("consume runtime: {e}"))?;
+        rt.block_on(worker.consume(request))
     })
     .await
+    .map_err(|e| format!("consume join: {e}"))?
 }
 
 #[tauri::command]
@@ -156,7 +204,8 @@ pub async fn kafka_get_latest_schema(
 pub async fn kafka_list_consumer_groups(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<ConsumerGroupInfo>, String> {
-    state.kafka.lock().await.list_consumer_groups()
+    // Must not hold the live slot — group listing hits GroupCoordinator and can stall for ages.
+    with_session_worker(&state, |session| session.list_consumer_groups()).await
 }
 
 #[tauri::command]
@@ -165,11 +214,10 @@ pub async fn kafka_get_group_offsets(
     group_id: String,
     topic: Option<String>,
 ) -> Result<Vec<GroupOffsetEntry>, String> {
-    state
-        .kafka
-        .lock()
-        .await
-        .get_group_offsets(&group_id, topic.as_deref())
+    with_session_worker(&state, move |session| {
+        session.get_group_offsets(&group_id, topic.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -177,7 +225,11 @@ pub async fn kafka_get_lag_summary(
     state: State<'_, Arc<AppState>>,
     topic: Option<String>,
 ) -> Result<LagSummaryResult, String> {
-    state.kafka.lock().await.get_lag_summary(topic.as_deref())
+    // Lag walks every group via coordinator — previously pinned the mutex and froze topic switches.
+    with_session_worker(&state, move |session| {
+        session.get_lag_summary(topic.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]

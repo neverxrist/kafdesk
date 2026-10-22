@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { KafkaMessageView, TopicInfo } from '../../types/kafdesk'
 import EmptyState from '../EmptyState'
 import MessageCard from '../MessageCard'
+import MsgFontControls from '../MsgFontControls'
 import type { useLocale } from '../../hooks/useLocale'
 import {
   loadMessageViewMode,
@@ -116,21 +117,24 @@ export default function TailPanel({
             <h2 style={{ margin: 0 }}>{tailing ? tr('tailRunning') : tr('tailStopped')}</h2>
             <div className="status">{tr('tailHint')}</div>
           </div>
-          <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
-            <button
-              type="button"
-              className={viewMode === 'full' ? 'active' : undefined}
-              onClick={() => setView('full')}
-            >
-              {tr('viewFull')}
-            </button>
-            <button
-              type="button"
-              className={viewMode === 'compact' ? 'active' : undefined}
-              onClick={() => setView('compact')}
-            >
-              {tr('viewCompact')}
-            </button>
+          <div className="messages-panel-controls">
+            <MsgFontControls tr={tr} />
+            <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
+              <button
+                type="button"
+                className={viewMode === 'full' ? 'active' : undefined}
+                onClick={() => setView('full')}
+              >
+                {tr('viewFull')}
+              </button>
+              <button
+                type="button"
+                className={viewMode === 'compact' ? 'active' : undefined}
+                onClick={() => setView('compact')}
+              >
+                {tr('viewCompact')}
+              </button>
+            </div>
           </div>
         </div>
       </div>

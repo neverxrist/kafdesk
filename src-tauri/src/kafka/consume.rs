@@ -4,9 +4,11 @@ use crate::domain::{
     PartitionTimestampSeek, PartitionWatermark,
 };
 use crate::types::*;
+use super::consume_ctx::ConsumeCtx;
 use super::decode::headers_from_message;
-use super::session::{KafkaSession, BConsumer};
-use rdkafka::consumer::Consumer;
+use super::session::KafkaSession;
+use rdkafka::config::FromClientConfigAndContext;
+use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::Message;
 use std::collections::HashMap;
@@ -15,24 +17,30 @@ use std::time::{Duration, Instant};
 impl KafkaSession {
     pub async fn consume(&self, request: ConsumeRequest) -> Result<Vec<KafkaMessageView>, String> {
         self.ensure_admin()?;
-        let topic_info = self.get_topic_offsets(&request.topic)?;
-        let topic_offsets: Vec<PartitionWatermark> = topic_info
-            .partitions
-            .iter()
-            .map(|p| PartitionWatermark {
-                partition: p.partition_id,
-                low: p
-                    .offset_low
-                    .as_deref()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
-                high: p
-                    .offset_high
-                    .as_deref()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
-            })
-            .collect();
+        let (topic_offsets, partition_ids_fallback) = {
+            if let Some(ref hints) = request.partition_watermarks {
+                if !hints.is_empty() {
+                    let wm: Vec<_> = hints
+                        .iter()
+                        .map(|h| PartitionWatermark {
+                            partition: h.partition,
+                            low: h.low,
+                            high: h.high,
+                        })
+                        .collect();
+                    let ids: Vec<i32> = wm.iter().map(|w| w.partition).collect();
+                    (wm, ids)
+                } else {
+                    let info = self.get_topic_offsets(&request.topic)?;
+                    let ids: Vec<i32> = info.partitions.iter().map(|p| p.partition_id).collect();
+                    (Self::watermarks_from_topic_info(&info), ids)
+                }
+            } else {
+                let info = self.get_topic_offsets(&request.topic)?;
+                let ids: Vec<i32> = info.partitions.iter().map(|p| p.partition_id).collect();
+                (Self::watermarks_from_topic_info(&info), ids)
+            }
+        };
 
         let start_from = request
             .start_from
@@ -44,6 +52,21 @@ impl KafkaSession {
                     "beginning".into()
                 }
             });
+
+        // Watermarks failed (NotLeaderForPartition etc.) — still consume via relative offsets.
+        if topic_offsets.is_empty() {
+            let parts = request
+                .partitions
+                .clone()
+                .filter(|p| !p.is_empty())
+                .unwrap_or(partition_ids_fallback);
+            if parts.is_empty() {
+                return Ok(vec![]);
+            }
+            return self
+                .consume_relative_offsets(&request, &start_from, &parts)
+                .await;
+        }
 
         let has_content = [
             request.search.as_deref(),
@@ -89,15 +112,37 @@ impl KafkaSession {
         }
 
         let mut cfg = self.base_config.clone();
-        cfg.set(
-            "group.id",
-            format!("kafdesk-ui-{}", uuid::Uuid::new_v4()),
-        );
+        // Prefer stable group id (ACL). Random UUIDs often get GroupAuthorizationFailed.
+        let group_id = self
+            .config
+            .as_ref()
+            .and_then(|c| c.sasl.as_ref())
+            .map(|s| s.username.trim())
+            .filter(|u| !u.is_empty())
+            .map(|u| format!("kafdesk-{u}"))
+            .unwrap_or_else(|| "kafdesk-ui".into());
+        cfg.set("group.id", &group_id);
         cfg.set("enable.auto.commit", "false");
+        cfg.set("enable.auto.offset.store", "false");
         cfg.set("auto.offset.reset", "earliest");
         cfg.set("enable.partition.eof", "true");
-        let consumer: BConsumer =
-            cfg.create().map_err(|e| e.to_string())?;
+        // Fail fast when advertised brokers are unreachable (DNS / transport flaps).
+        cfg.set("socket.timeout.ms", "5000");
+        cfg.set("socket.connection.setup.timeout.ms", "5000");
+        cfg.set("session.timeout.ms", "6000");
+        cfg.set("reconnect.backoff.ms", "100");
+        cfg.set("reconnect.backoff.max.ms", "1000");
+        cfg.set("metadata.request.timeout.ms", "5000");
+        // Don't spam FindCoordinator while we only use assign() (no commit).
+        cfg.set("coordinator.query.interval.ms", "600000");
+
+        let ctx = ConsumeCtx::default();
+        let err_slot = ctx.clone();
+        let consumer: BaseConsumer<ConsumeCtx> =
+            BaseConsumer::from_config_and_context(&cfg, ctx).map_err(|e| e.to_string())?;
+
+        // Bootstrap IP can work while advertised.listeners DNS does not — hang forever otherwise.
+        super::dns_check::ensure_advertised_brokers_resolvable(&consumer, &self.brokers)?;
 
         let mut tpl = TopicPartitionList::new();
         for (partition, offset) in &plan.seek_plan {
@@ -140,6 +185,20 @@ impl KafkaSession {
                 // idle after activity
                 if !plan.has_filter || start_from != "end" {
                     break;
+                }
+            }
+            // Only hard-fail early on ACL / DNS — GroupCoordinator SASL noise is common
+            // even when partition fetch still works.
+            if messages.is_empty() && last_msg.elapsed() > Duration::from_secs(2) {
+                if let Some(err) = err_slot.peek_error() {
+                    if err.contains("Group authorization") {
+                        return Err(format!(
+                            "Consumer group ACL denied for '{group_id}': {err}"
+                        ));
+                    }
+                    if err.contains("Failed to resolve") {
+                        return Err(err);
+                    }
                 }
             }
 
@@ -230,10 +289,176 @@ impl KafkaSession {
             }
         }
 
+        if messages.is_empty() {
+            if let Some(err) = err_slot.peek_error() {
+                if err.contains("Group authorization") {
+                    return Err(format!(
+                        "Consumer group ACL denied for '{group_id}': {err}"
+                    ));
+                }
+                if err.contains("Failed to resolve") {
+                    return Err(err);
+                }
+                return Err(format!(
+                    "No messages received; broker error while consuming: {err}"
+                ));
+            }
+        }
+
         let mut sorted = sort_messages_by_time(messages, plan.newest_first);
         sorted.truncate(plan.limit as usize);
         Ok(sorted)
     }
+
+    fn watermarks_from_topic_info(topic_info: &TopicInfo) -> Vec<PartitionWatermark> {
+        topic_info
+            .partitions
+            .iter()
+            .filter_map(|p| {
+                let low = p.offset_low.as_deref()?.parse().ok()?;
+                let high = p.offset_high.as_deref()?.parse().ok()?;
+                Some(PartitionWatermark {
+                    partition: p.partition_id,
+                    low,
+                    high,
+                })
+            })
+            .collect()
+    }
+
+    /// When QueryWatermarkOffsets fails (stale leader), assign Beginning / OffsetTail instead.
+    async fn consume_relative_offsets(
+        &self,
+        request: &ConsumeRequest,
+        start_from: &str,
+        partitions: &[i32],
+    ) -> Result<Vec<KafkaMessageView>, String> {
+        let limit = crate::domain::clamp_consume_limit(request.limit);
+        let mut cfg = self.base_config.clone();
+        let group_id = self
+            .config
+            .as_ref()
+            .and_then(|c| c.sasl.as_ref())
+            .map(|s| s.username.trim())
+            .filter(|u| !u.is_empty())
+            .map(|u| format!("kafdesk-{u}"))
+            .unwrap_or_else(|| "kafdesk-ui".into());
+        cfg.set("group.id", &group_id);
+        cfg.set("enable.auto.commit", "false");
+        cfg.set("enable.auto.offset.store", "false");
+        cfg.set("enable.partition.eof", "true");
+        cfg.set("socket.timeout.ms", "5000");
+        cfg.set("socket.connection.setup.timeout.ms", "5000");
+        cfg.set("coordinator.query.interval.ms", "600000");
+
+        let ctx = ConsumeCtx::default();
+        let err_slot = ctx.clone();
+        let consumer: BaseConsumer<ConsumeCtx> =
+            BaseConsumer::from_config_and_context(&cfg, ctx).map_err(|e| e.to_string())?;
+        super::dns_check::ensure_advertised_brokers_resolvable(&consumer, &self.brokers)?;
+
+        let mut tpl = TopicPartitionList::new();
+        for &p in partitions {
+            let off = if start_from == "end" {
+                Offset::OffsetTail(limit as i64)
+            } else if start_from == "offset" {
+                let raw = request
+                    .start_offset
+                    .as_deref()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                Offset::Offset(raw)
+            } else {
+                Offset::Beginning
+            };
+            tpl.add_partition_offset(&request.topic, p, off)
+                .map_err(|e| e.to_string())?;
+        }
+        consumer.assign(&tpl).map_err(|e| e.to_string())?;
+
+        let filter = BrokerMessageFilter {
+            search: request.search.clone(),
+            search_key: request.search_key.clone(),
+            header_key: request.search_header_key.clone(),
+            header_value: request.search_header_value.clone(),
+            time_from: request.time_from,
+            time_to: request.time_to,
+        };
+
+        let mut messages = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(10_000);
+        let mut last_msg = Instant::now();
+        let mut eof = 0usize;
+
+        while Instant::now() < deadline && messages.len() < limit as usize {
+            if eof >= partitions.len() && !messages.is_empty() {
+                break;
+            }
+            if last_msg.elapsed() > Duration::from_millis(900) && !messages.is_empty() {
+                break;
+            }
+            match consumer.poll(Duration::from_millis(200)) {
+                None => continue,
+                Some(Err(e)) => {
+                    let msg = e.to_string();
+                    if msg.to_lowercase().contains("partition eof")
+                        || msg.to_lowercase().contains("end of partition")
+                    {
+                        eof += 1;
+                        continue;
+                    }
+                    if let Some(err) = err_slot.peek_error() {
+                        return Err(format!("Consume error: {msg} ({err})"));
+                    }
+                    return Err(format!("Consume error: {msg}"));
+                }
+                Some(Ok(msg)) => {
+                    last_msg = Instant::now();
+                    let partition = msg.partition();
+                    let offset = msg.offset();
+                    let key = msg.key();
+                    let headers = headers_from_message(&msg);
+                    let ts = match msg.timestamp() {
+                        rdkafka::Timestamp::CreateTime(ms)
+                        | rdkafka::Timestamp::LogAppendTime(ms) => ms,
+                        _ => 0,
+                    };
+                    if !matches_raw_pre_filter(key, &ts.to_string(), &headers, &filter) {
+                        continue;
+                    }
+                    let view = self
+                        .decode_message_view(
+                            msg.topic(),
+                            partition,
+                            offset,
+                            ts,
+                            key,
+                            msg.payload(),
+                            headers,
+                        )
+                        .await;
+                    if !matches_decoded_message(&view, &filter) {
+                        continue;
+                    }
+                    messages.push(view);
+                }
+            }
+        }
+
+        if messages.is_empty() {
+            if let Some(err) = err_slot.peek_error() {
+                return Err(format!(
+                    "No messages (watermarks unavailable; relative consume): {err}"
+                ));
+            }
+        }
+
+        let newest_first = start_from == "end";
+        let mut sorted = sort_messages_by_time(messages, newest_first);
+        sorted.truncate(limit as usize);
+        Ok(sorted)
+    }
+
     fn offsets_for_times(
         &self,
         topic: &str,

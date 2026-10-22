@@ -43,7 +43,10 @@ export interface ClusterConfig {
     username: string
     password: string
   }
-  /** Optional TLS for Schema Registry HTTPS (paths to PEM files on disk) */
+  /**
+   * Optional TLS PEMs on disk — used for Kafka SSL (broker) and Schema Registry HTTPS.
+   * Field name is historical; applies to the whole connection when SSL is on.
+   */
   schemaRegistryTls?: {
     caPath?: string
     certPath?: string
@@ -137,6 +140,8 @@ export interface ConsumeRequest {
   /** epoch ms, inclusive */
   timeTo?: number
   partitions?: number[]
+  /** From a prior getTopicOffsets — avoids a second watermark round-trip on refresh */
+  partitionWatermarks?: Array<{ partition: number; low: number; high: number }>
 }
 
 export interface ConsumerGroupInfo {
@@ -274,6 +279,8 @@ export interface ConnectResult {
   ok: boolean
   schemaRegistry: SchemaRegistryStatus
   schemaRegistryError?: string
+  /** Advertised broker DNS missing locally — consume needs /etc/hosts or fixed listeners. */
+  brokerDnsWarning?: string
 }
 
 export interface PingResult {

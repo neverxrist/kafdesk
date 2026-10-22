@@ -73,7 +73,6 @@ export default function SettingsPanel({
           />
           <span>{tr('autoUpdate')}</span>
         </label>
-        <p className="settings-hint">{tr('autoUpdateHint')}</p>
         <div className="settings-actions">
           <button type="button" onClick={onCheckUpdates}>
             {tr('checkUpdates')}
@@ -85,7 +84,6 @@ export default function SettingsPanel({
           ) : null}
           <span className="status">{updateText(tr, updateStatus)}</span>
         </div>
-        <p className="settings-hint settings-hint-foot">{tr('appearanceInTopbar')}</p>
       </section>
     </div>
   )

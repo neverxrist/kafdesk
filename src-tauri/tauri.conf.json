@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "KafDesk",
   "mainBinaryName": "KafDesk",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "identifier": "app.kafdesk.desktop",
   "build": {
     "frontendDist": "../dist",

@@ -18,10 +18,12 @@ import '@fontsource/ibm-plex-mono/cyrillic-500.css'
 import '@fontsource/ibm-plex-mono/cyrillic-600.css'
 import './styles.css'
 import { installDragScroll } from './lib/dragScroll'
+import { applyMsgFontPx, loadMsgFontPx } from './lib/msgFontScale'
 import { installTauriKafdesk } from './lib/tauriBridge'
 
 installTauriKafdesk()
 installDragScroll()
+applyMsgFontPx(loadMsgFontPx())
 
 const savedTheme = localStorage.getItem('kafdesk.theme')
 document.documentElement.setAttribute('data-theme', savedTheme === 'light' ? 'light' : 'dark')

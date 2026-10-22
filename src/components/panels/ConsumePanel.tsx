@@ -3,6 +3,7 @@ import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../types/
 import EmptyState from '../EmptyState'
 import MessageCard from '../MessageCard'
 import MessageDiffPanel from '../MessageDiffPanel'
+import MsgFontControls from '../MsgFontControls'
 import type { useLocale } from '../../hooks/useLocale'
 import type { SavedConsumeQuery } from '../../lib/savedQueries'
 import { RefreshIcon } from '../ConnActionIcons'
@@ -620,6 +621,7 @@ export default function ConsumePanel({
               >
                 <BatchSortIcon newestFirst={newestFirst} />
               </button>
+              <MsgFontControls tr={tr} />
               <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
                 <button
                   type="button"

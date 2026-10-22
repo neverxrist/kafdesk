@@ -62,6 +62,8 @@ export default function TopBar({
   setSidebarOpen,
   onToggleSettings,
   settingsActive,
+  onToggleLogs,
+  logsActive,
   connections,
   activeId,
   onSelectConnection,
@@ -83,6 +85,8 @@ export default function TopBar({
   setSidebarOpen: (v: boolean | ((prev: boolean) => boolean)) => void
   onToggleSettings: () => void
   settingsActive?: boolean
+  onToggleLogs: () => void
+  logsActive?: boolean
   connections: ClusterConfig[]
   activeId: string
   onSelectConnection: (id: string) => void
@@ -226,7 +230,6 @@ export default function TopBar({
             ['produce', tr('produce')],
             ['tail', tr('tail')],
             ['groups', tr('groups')],
-            ['logs', tr('logs')],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -246,6 +249,17 @@ export default function TopBar({
       </nav>
 
       <div className="topbar-controls">
+        <button
+          className={`icon-btn logs-btn ${logsActive ? 'active' : ''}`}
+          onClick={onToggleLogs}
+          type="button"
+          title={tr('logs')}
+          aria-label={tr('logs')}
+        >
+          <span className="logs-btn-label" aria-hidden>
+            log
+          </span>
+        </button>
         <button
           className={`icon-btn settings-btn ${settingsActive ? 'active' : ''}`}
           onClick={onToggleSettings}

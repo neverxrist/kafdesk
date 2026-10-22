@@ -16,7 +16,12 @@ import { useLocale } from './hooks/useLocale'
 import { useGlass } from './hooks/useGlass'
 import { useTheme } from './hooks/useTheme'
 import { detectUpdateOs } from './lib/updateOs'
+import { installWindowStatePersistence, restoreWindowState } from './lib/windowState'
 import type { MsgKey } from './i18n'
+
+function isOverlayTab(tab: AppTab) {
+  return tab === 'settings' || tab === 'logs'
+}
 
 export default function App() {
   const { theme, toggleTheme } = useTheme()
@@ -25,7 +30,11 @@ export default function App() {
   const { logs, setLogs, pushLog } = useAppLogs()
   const a = useKafdeskApp(pushLog)
   const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false)
-  const tabBeforeSettings = useRef<AppTab>('consume')
+  const tabBeforeOverlay = useRef<AppTab>('consume')
+
+  useEffect(() => {
+    void restoreWindowState().then(() => installWindowStatePersistence())
+  }, [])
 
   useEffect(() => {
     if (a.updateStatus.state !== 'downloaded') setUpdatePromptDismissed(false)
@@ -78,8 +87,10 @@ export default function App() {
         pendingDeleteId={a.pendingDeleteId}
         config={a.config}
         authMethod={a.authMethod}
-        brokersText={a.brokersText}
-        setBrokersText={a.setBrokersText}
+        brokerHost={a.brokerHost}
+        setBrokerHost={a.setBrokerHost}
+        brokerPort={a.brokerPort}
+        setBrokerPort={a.setBrokerPort}
         connected={a.connected}
         srStatus={a.srStatus}
         busy={a.busy}
@@ -111,13 +122,22 @@ export default function App() {
           setSidebarOpen={a.setSidebarOpen}
           onToggleSettings={() => {
             if (a.tab === 'settings') {
-              a.setTab(tabBeforeSettings.current)
+              a.setTab(tabBeforeOverlay.current)
             } else {
-              tabBeforeSettings.current = a.tab
+              if (!isOverlayTab(a.tab)) tabBeforeOverlay.current = a.tab
               a.setTab('settings')
             }
           }}
           settingsActive={a.tab === 'settings'}
+          onToggleLogs={() => {
+            if (a.tab === 'logs') {
+              a.setTab(tabBeforeOverlay.current)
+            } else {
+              if (!isOverlayTab(a.tab)) tabBeforeOverlay.current = a.tab
+              a.setTab('logs')
+            }
+          }}
+          logsActive={a.tab === 'logs'}
           connections={a.connections}
           activeId={a.activeId}
           onSelectConnection={a.selectConnection}

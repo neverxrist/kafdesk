@@ -17,7 +17,8 @@ pub fn consume_wait_ms(
         + (partition_count as u64) * 250
         + if has_filter { 4_000 } else { 0 }
         + if start_from == "beginning" { 1_500 } else { 0 };
-    ms = ms.min(30_000);
+    // Keep windows short — unreachable advertised brokers must not pin the IPC for 30s.
+    ms = ms.min(12_000);
     ms
 }
 

@@ -60,7 +60,7 @@ pub(crate) fn build_client_config(config: &ClusterConfig) -> Result<ClientConfig
         }
     }
 
-    // Vendored OpenSSL has no corp trust store — reuse SR PEM paths for broker SSL when set.
+    // Vendored OpenSSL has no corp trust store — reuse TLS PEM paths for broker SSL when set.
     if want_ssl {
         if let Some(ref tls) = config.schema_registry_tls {
             if let Some(ca) = tls.ca_path.as_deref().filter(|p| !p.is_empty()) {
@@ -76,7 +76,31 @@ pub(crate) fn build_client_config(config: &ClusterConfig) -> Result<ClientConfig
                 cfg.set("enable.ssl.certificate.verification", "false");
             }
         }
+
+        // Broker certs often only list DNS SANs. Connecting by IP fails hostname check
+        // even when the CA chain is valid — disable endpoint identification for IP bootstraps.
+        if brokers_include_ip(&config.brokers) {
+            cfg.set("ssl.endpoint.identification.algorithm", "none");
+        }
     }
 
     Ok(cfg)
+}
+
+fn brokers_include_ip(brokers: &[String]) -> bool {
+    brokers.iter().any(|b| {
+        let host = b
+            .rsplit_once(':')
+            .map(|(h, p)| {
+                if p.chars().all(|c| c.is_ascii_digit()) {
+                    h
+                } else {
+                    b.as_str()
+                }
+            })
+            .unwrap_or(b.as_str())
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        host.parse::<std::net::IpAddr>().is_ok()
+    })
 }

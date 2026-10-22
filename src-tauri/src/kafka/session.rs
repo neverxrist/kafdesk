@@ -32,6 +32,8 @@ pub struct KafkaSession {
     pub(crate) registry: Option<SchemaRegistryClient>,
     pub(crate) sr_status: String,
     pub(crate) sr_error: Option<String>,
+    /// Cached Confluent schema bodies by id — avoids N×SR round-trips per consume window.
+    pub(crate) schema_cache: Arc<std::sync::Mutex<HashMap<i32, String>>>,
     pub(crate) tailing: Arc<AtomicBool>,
     pub(crate) tail_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -48,14 +50,42 @@ impl KafkaSession {
             registry: None,
             sr_status: "none".into(),
             sr_error: None,
+            schema_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             tailing: Arc::new(AtomicBool::new(false)),
             tail_task: Mutex::new(None),
         }
+    }
+
+    /// Independent worker for long consume — live session stays in the mutex slot
+    /// so topic switch / offsets / disconnect are not blocked for the whole window.
+    pub(crate) fn clone_for_consume(&self) -> Result<Self, String> {
+        self.ensure_admin()?;
+        let admin: Admin = self
+            .base_config
+            .create()
+            .map_err(|e| format!("consume admin: {e}"))?;
+        Ok(Self {
+            config: self.config.clone(),
+            producer: None,
+            admin: Some(admin),
+            brokers: self.brokers.clone(),
+            client_id: self.client_id.clone(),
+            base_config: self.base_config.clone(),
+            registry: self.registry.clone(),
+            sr_status: self.sr_status.clone(),
+            sr_error: self.sr_error.clone(),
+            schema_cache: Arc::clone(&self.schema_cache),
+            tailing: Arc::clone(&self.tailing),
+            tail_task: Mutex::new(None),
+        })
     }
     pub(crate) fn make_consumer(&self, group_prefix: &str) -> Result<BConsumer, String> {
         let mut c = self.base_config.clone();
         c.set("group.id", format!("{group_prefix}-{}", uuid::Uuid::new_v4()));
         c.set("enable.auto.commit", "false");
+        // Prefer fresh leaders — stale metadata → NotLeaderForPartition on watermarks.
+        c.set("metadata.max.age.ms", "5000");
+        c.set("topic.metadata.refresh.interval.ms", "10000");
         c.create::<BConsumer>().map_err(|e| e.to_string())
     }
     pub async fn connect(
@@ -86,6 +116,9 @@ impl KafkaSession {
         consumer
             .fetch_metadata(None, Duration::from_secs(10))
             .map_err(|e| format!("Kafka metadata: {e}"))?;
+
+        let broker_dns_warning =
+            super::dns_check::dns_warning_for_connect(&consumer, &brokers);
 
         let mut sr_status = "none".to_string();
         let mut sr_error = None;
@@ -127,6 +160,7 @@ impl KafkaSession {
             ok: true,
             schema_registry: sr_status,
             schema_registry_error: sr_error,
+            broker_dns_warning,
         })
     }
     pub async fn disconnect(&mut self) {
@@ -137,6 +171,9 @@ impl KafkaSession {
         self.config = None;
         self.sr_status = "none".into();
         self.sr_error = None;
+        if let Ok(mut cache) = self.schema_cache.lock() {
+            cache.clear();
+        }
     }
     pub fn is_connected(&self) -> bool {
         self.admin.is_some() && self.producer.is_some()
@@ -260,32 +297,109 @@ impl KafkaSession {
     }
     pub fn get_topic_offsets(&self, topic: &str) -> Result<TopicInfo, String> {
         self.ensure_admin()?;
-        let consumer = self.metadata_consumer()?;
+        let mut consumer = self.metadata_consumer()?;
+        // No hard DNS ensure here — enrich calls this for every topic and must stay fast.
+        // Consume still runs ensure_advertised_brokers_resolvable.
+
         let meta = consumer
-            .fetch_metadata(Some(topic), Duration::from_secs(15))
+            .fetch_metadata(Some(topic), Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
         let tmeta = meta
             .topics()
             .iter()
             .find(|t| t.name() == topic)
             .ok_or_else(|| format!("Topic not found: {topic}"))?;
+        let part_meta: Vec<(i32, i32, Vec<i32>, Vec<i32>)> = tmeta
+            .partitions()
+            .iter()
+            .map(|p| {
+                (
+                    p.id(),
+                    p.leader(),
+                    p.replicas().to_vec(),
+                    p.isr().to_vec(),
+                )
+            })
+            .collect();
+        if part_meta.is_empty() {
+            return Ok(TopicInfo {
+                name: topic.to_string(),
+                partitions: vec![],
+                approx_messages: Some(0),
+            });
+        }
 
         let mut partitions = Vec::new();
         let mut approx_total = 0i64;
-        for p in tmeta.partitions() {
-            let (low, high) = consumer
-                .fetch_watermarks(topic, p.id(), Duration::from_secs(8))
-                .map_err(|e| format!("watermarks {topic}/{}: {e}", p.id()))?;
-            let approx = (high - low).max(0);
-            approx_total += approx;
+        // Keep enrich snappy — soft-fail watermarks; consume does not need every high watermark.
+        let deadline = Instant::now() + Duration::from_secs(8);
+
+        for (pid, mut leader, mut replicas, mut isr) in part_meta {
+            if Instant::now() >= deadline {
+                // Return what we have — consume can fall back to Offset::End / Beginning.
+                break;
+            }
+
+            let mut got: Option<(i64, i64)> = None;
+            for attempt in 0..3 {
+                match consumer.fetch_watermarks(topic, pid, Duration::from_secs(2)) {
+                    Ok(wh) => {
+                        got = Some(wh);
+                        break;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        let retryable = msg.contains("NotLeaderForPartition")
+                            || msg.contains("LeaderNotAvailable")
+                            || msg.contains("NotController")
+                            || msg.contains("NetworkException")
+                            || msg.contains("Broker transport")
+                            || msg.contains("Timed out");
+                        if !retryable || attempt == 2 {
+                            break;
+                        }
+                        // Recreate client — refresh alone often keeps a poisoned broker connection.
+                        if let Ok(c) = self.metadata_consumer() {
+                            consumer = c;
+                        }
+                        if let Ok(m) = consumer.fetch_metadata(Some(topic), Duration::from_secs(3)) {
+                            if let Some(p) = m
+                                .topics()
+                                .iter()
+                                .find(|t| t.name() == topic)
+                                .and_then(|t| t.partitions().iter().find(|p| p.id() == pid))
+                            {
+                                leader = p.leader();
+                                replicas = p.replicas().to_vec();
+                                isr = p.isr().to_vec();
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(80 + attempt as u64 * 80));
+                    }
+                }
+            }
+
+            // Soft-fail: keep partition in the list even without watermarks (NotLeader etc.).
+            let (offset_low, offset_high, approx_messages) = if let Some((low, high)) = got {
+                let approx = (high - low).max(0);
+                approx_total += approx;
+                (
+                    Some(low.to_string()),
+                    Some(high.to_string()),
+                    Some(approx),
+                )
+            } else {
+                (None, None, None)
+            };
+
             partitions.push(PartitionInfo {
-                partition_id: p.id(),
-                leader: p.leader(),
-                replicas: p.replicas().to_vec(),
-                isr: p.isr().to_vec(),
-                offset_low: Some(low.to_string()),
-                offset_high: Some(high.to_string()),
-                approx_messages: Some(approx),
+                partition_id: pid,
+                leader,
+                replicas,
+                isr,
+                offset_low,
+                offset_high,
+                approx_messages,
             });
         }
         partitions.sort_by_key(|p| p.partition_id);
@@ -310,7 +424,27 @@ impl KafkaSession {
         }
         if let (Some(reg), Some(buf)) = (&self.registry, payload) {
             if let Some((id, body)) = strip_confluent_wire(buf) {
-                match reg.get_schema_by_id(id).await {
+                let cached = self
+                    .schema_cache
+                    .lock()
+                    .ok()
+                    .and_then(|c| c.get(&id).cloned());
+                let schema_result = if let Some(schema_str) = cached {
+                    Ok(schema_str)
+                } else {
+                    match tokio::time::timeout(Duration::from_secs(5), reg.get_schema_by_id(id)).await
+                    {
+                        Ok(Ok(schema_str)) => {
+                            if let Ok(mut cache) = self.schema_cache.lock() {
+                                cache.insert(id, schema_str.clone());
+                            }
+                            Ok(schema_str)
+                        }
+                        Ok(Err(err)) => Err(err),
+                        Err(_) => Err(format!("Schema Registry timeout (id={id})")),
+                    }
+                };
+                match schema_result {
                     Ok(schema_str) => match decode_datum_to_json(&schema_str, body) {
                         Ok(json) => {
                             return decode_with_avro_json(
