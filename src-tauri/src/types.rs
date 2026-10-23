@@ -271,10 +271,18 @@ pub struct ProduceBatchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TailResumeOffset {
+    pub partition: i32,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TailRequest {
     pub topic: String,
     #[serde(default)]
     pub partitions: Option<Vec<i32>>,
+    /// Kept for IPC compat; live tail filters in the UI only (buffer stays intact).
     #[serde(default)]
     pub search: Option<String>,
     #[serde(default)]
@@ -286,6 +294,9 @@ pub struct TailRequest {
     pub search_header_key: Option<String>,
     #[serde(default)]
     pub search_header_value: Option<String>,
+    /// Resume from these offsets (Stop→Start). Empty / absent → latest.
+    #[serde(default)]
+    pub resume_offsets: Option<Vec<TailResumeOffset>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -21,6 +21,8 @@ export default function SchemasPanel({
   busy,
   onRefreshSubjects,
   onUseForProduce,
+  focusSubject,
+  onFocusSubjectConsumed,
 }: {
   tr: Tr
   connected: boolean
@@ -29,6 +31,9 @@ export default function SchemasPanel({
   busy: boolean
   onRefreshSubjects: () => void
   onUseForProduce?: (subject: string) => void
+  /** One-shot select from topic schema popover. */
+  focusSubject?: string | null
+  onFocusSubjectConsumed?: () => void
 }) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
@@ -36,6 +41,15 @@ export default function SchemasPanel({
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const loadGen = useRef(0)
+  const clearFocusRef = useRef(onFocusSubjectConsumed)
+  clearFocusRef.current = onFocusSubjectConsumed
+
+  useEffect(() => {
+    if (!focusSubject) return
+    setSelected(focusSubject)
+    setQuery('')
+    clearFocusRef.current?.()
+  }, [focusSubject])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

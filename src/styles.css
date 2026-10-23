@@ -25,6 +25,7 @@
   --jh-str: #7ddeab;
   --jh-num: #f0b429;
   --jh-bool: #c2cad8;
+  --format-avro: #5ed0c8;
   --msg-font-size: 13px;
 }
 
@@ -50,6 +51,7 @@
   --jh-str: #057a42;
   --jh-num: #9a5200;
   --jh-bool: #1a2740;
+  --format-avro: #0f8f86;
 }
 
 * {
@@ -99,6 +101,8 @@ body.drag-scrolling * {
 .messages input,
 .messages textarea,
 .messages .msg-body,
+.messages .msg-key,
+.messages .msg-key strong,
 .messages .allow-select,
 .messages pre,
 .messages code,
@@ -840,9 +844,12 @@ textarea:focus {
   max-width: 100%;
   padding: 0.15rem 0.5rem;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-2) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
   font-size: 0.8rem;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
 }
 
 .msg-key em {
@@ -851,8 +858,8 @@ textarea:focus {
   font-size: 0.66rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--accent-2);
-  font-weight: 500;
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .msg-key strong {
@@ -1892,7 +1899,27 @@ body.conn-reordering * {
 }
 
 .toolbar-seek-part {
-  width: 4.25rem; /* "all" + native chevron in WKWebView */
+  width: 3.5rem; /* "all" + native chevron */
+}
+
+/* Beat `.toolbar .field { flex: 1 }` so Partition stays compact. */
+.toolbar .field.toolbar-partition-field {
+  flex: 0 0 auto;
+  width: 3.6rem;
+  max-width: 3.6rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.toolbar .field.toolbar-partition-field select {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  text-align: center;
+  text-align-last: center;
+  padding-left: 0.2rem;
+  padding-right: 0.95rem;
 }
 
 .toolbar-seek-from {
@@ -3593,6 +3620,32 @@ body.topics-resizing * {
   font-size: 0.95rem;
 }
 
+.msg-diff-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.msg-diff-only {
+  font-size: 0.78rem;
+  padding: 0.28rem 0.55rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+
+.msg-diff-only.active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.msg-diff-empty {
+  padding: 0.85rem 0.5rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .msg-diff-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3682,6 +3735,33 @@ body.topics-resizing * {
   line-height: 1.4;
   max-height: 280px;
   overflow: auto;
+}
+
+.msg-diff-line {
+  padding: 0 0.2rem;
+  border-radius: 2px;
+  min-height: 1.4em;
+}
+
+.msg-diff-line-same {
+  background: transparent;
+}
+
+.msg-diff-line-changed {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.msg-diff-line-removed {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+.msg-diff-line-added {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.msg-diff-line-empty {
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  opacity: 0.55;
 }
 
 .msg-diff-json .jh-key {
@@ -3779,6 +3859,18 @@ body.topics-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: min(36vw, 22rem);
+}
+
+.tail-buf-count {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tail-buf-sep {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .messages-panel-controls {
@@ -4083,12 +4175,8 @@ body.topics-resizing * {
   width: 100%;
   margin: 0;
   padding: 0.2rem 0;
-  border: none;
-  background: transparent;
-  font: inherit;
   font-size: 0.8rem;
   color: var(--muted);
-  text-align: left;
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
@@ -4105,19 +4193,42 @@ body.topics-resizing * {
 .msg-compact-chevron {
   flex: 0 0 auto;
   width: 0.85rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
   color: var(--accent);
   font-size: 0.72rem;
   line-height: 1;
+  text-align: center;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.msg-compact-chevron:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.msg-compact-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  min-width: 0;
+  text-align: left;
 }
 
 .msg-compact-row .msg-key {
+  flex: 0 1 auto;
+  width: max-content;
+  max-width: min(45%, 28rem);
   min-width: 0;
-  max-width: 45%;
-  flex: 1;
 }
 
 .msg-compact-row .msg-head-right {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .msg-compact-row .msg-key.muted {
@@ -4233,6 +4344,14 @@ body.topics-resizing * {
   color: var(--jh-bool);
 }
 
+mark.search-hit {
+  background: color-mix(in srgb, var(--warn) 55%, transparent);
+  color: inherit;
+  padding: 0 0.08em;
+  border-radius: 2px;
+  font-weight: inherit;
+}
+
 .msg-body .jh-null {
   color: var(--muted);
   font-style: italic;
@@ -4323,9 +4442,9 @@ button.topic-lag-chip:hover {
 }
 
 .badge.avro {
-  border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border));
-  color: var(--accent-2);
-  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
+  border-color: color-mix(in srgb, var(--format-avro) 55%, var(--border));
+  color: var(--format-avro);
+  background: color-mix(in srgb, var(--format-avro) 14%, transparent);
 }
 
 .badge.json {

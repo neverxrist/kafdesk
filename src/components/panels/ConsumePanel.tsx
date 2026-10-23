@@ -419,6 +419,8 @@ export default function ConsumePanel({
   onClearDiff,
   onRepublish,
   onOpenConsumerGroup,
+  search = '',
+  searchScope = 'both',
 }: {
   tr: Tr
   topicDetails: TopicInfo | null
@@ -435,6 +437,8 @@ export default function ConsumePanel({
   onClearDiff: () => void
   onRepublish: (m: KafkaMessageView) => void
   onOpenConsumerGroup?: (groupId: string) => void
+  search?: string
+  searchScope?: SearchScope
 }) {
   const [hiddenPartitions, setHiddenPartitions] = useState<Set<number>>(() => new Set())
   const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
@@ -457,11 +461,13 @@ export default function ConsumePanel({
     setViewMode(mode)
     persistMessageViewMode(mode)
     // Bottom inspector is for compact / Offset Explorer style — hide in full.
-    // Also clear comparison so it does not reappear as the inline diff panel.
+    // Clear comparison on either switch so slot colors / inline / dock diff don't orphan.
+    if (diffMessages.length > 0) onClearDiff()
     if (mode === 'full') {
       setDockOpen(false)
       setDockDiff(false)
-      if (diffMessages.length > 0) onClearDiff()
+    } else {
+      setDockDiff(false)
     }
   }
 
@@ -592,6 +598,8 @@ export default function ConsumePanel({
         diffSlot={diffSlot}
         diffFull={diffFull}
         inspected={dockOpen && inspectId === id}
+        searchQuery={search}
+        searchScope={searchScope}
         onToggleDiff={dockShowDiff ? undefined : onToggleDiff}
         onRepublish={onRepublish}
         onInspect={canInspect ? openInspect : undefined}
@@ -789,6 +797,8 @@ export default function ConsumePanel({
             setDockDiff(false)
           }}
           onRepublish={onRepublish}
+          searchQuery={search}
+          searchScope={searchScope}
         />
       )}
     </section>

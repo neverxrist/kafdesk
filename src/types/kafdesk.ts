@@ -203,6 +203,11 @@ export interface SetGroupOffsetsRequest {
   partitions: Array<{ partition: number; offset: string }>
 }
 
+export interface TailResumeOffset {
+  partition: number
+  offset: number
+}
+
 export interface TailRequest {
   topic: string
   partitions?: number[]
@@ -212,6 +217,8 @@ export interface TailRequest {
   searchScope?: 'both' | 'key' | 'value'
   searchHeaderKey?: string
   searchHeaderValue?: string
+  /** Resume after Stop (offset to read next). Absent → latest. */
+  resumeOffsets?: TailResumeOffset[]
 }
 
 export interface UpdateStatus {

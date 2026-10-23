@@ -250,6 +250,7 @@ export default function App() {
                 onTogglePin={a.togglePinTopic}
                 subjects={a.subjects}
                 hasRegistry={a.hasRegistry}
+                onOpenSubjectInSchemas={a.openSubjectInSchemas}
               />
             )}
 
@@ -267,6 +268,8 @@ export default function App() {
                 onToggleDiff={a.toggleDiffMessage}
                 onClearDiff={a.clearDiff}
                 onRepublish={a.republishMessage}
+                search={a.search}
+                searchScope={a.searchScope}
                 onOpenConsumerGroup={(groupId) => {
                   a.selectGroup(groupId)
                   a.setTab('groups')
@@ -313,7 +316,10 @@ export default function App() {
                 tr={tr}
                 tailing={a.tailing}
                 tailMessages={a.tailMessages}
+                tailBufferCount={a.tailBufferCount}
                 selectedTopic={a.selectedTopic}
+                search={a.search}
+                searchScope={a.searchScope}
               />
             )}
             {a.tab === 'groups' && (
@@ -350,6 +356,8 @@ export default function App() {
                 busy={a.busy}
                 onRefreshSubjects={a.refreshSubjects}
                 onUseForProduce={a.useSubjectForProduce}
+                focusSubject={a.schemasFocusSubject}
+                onFocusSubjectConsumed={a.clearSchemasFocusSubject}
               />
             )}
           </div>

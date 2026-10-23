@@ -33,8 +33,14 @@ function templateForPrimitive(fieldName: string, prim: string): unknown {
     case 'boolean':
       return true
     case 'int':
+      // 32-bit: never {{ts}} (millis). Real timestamps → seconds; durations (*Time) → rand.
+      if (/timestamp|stamp|(^|_)(ts|date)$|at$/.test(n)) return '{{ts_sec}}'
+      if (/seq|index|offset|count|version|priority|retry|num|qty|quantity|rank/.test(n)) {
+        return '{{i}}'
+      }
+      return '{{rand}}'
     case 'long':
-      if (/time|ts|date|stamp|at$/.test(n)) return '{{ts}}'
+      if (/timestamp|stamp|(^|_)(ts|date)$|at$|time/.test(n)) return '{{ts}}'
       if (/seq|index|offset|count|version|priority|retry|num|qty|quantity|rank/.test(n)) {
         return '{{i}}'
       }
@@ -50,7 +56,8 @@ function templateForPrimitive(fieldName: string, prim: string): unknown {
       if (/(^|_)first/.test(n)) return '{{first}}'
       if (/(^|_)last|surname/.test(n)) return '{{last}}'
       if (/name/.test(n)) return '{{name}}'
-      if (/time|date|stamp/.test(n)) return '{{now}}'
+      // ISO-8601 fields: *Timestamp, *Date, paidAt, …
+      if (/time|date|stamp|at$/.test(n)) return '{{now}}'
       return 'val-{{i}}'
     default:
       return 'val-{{i}}'
@@ -176,6 +183,6 @@ export function mockFromAvroSchemaPretty(schemaJson: string): string {
   const named = new Map<string, Record<string, unknown>>()
   const raw = mockFromType(schema, named, 0, '', true)
   let text = JSON.stringify(raw, null, 2)
-  text = text.replace(/"\{\{(i|n|ts|rand)\}\}"/g, '{{$1}}')
+  text = text.replace(/"\{\{(i|n|ts|ts_sec|rand)\}\}"/g, '{{$1}}')
   return text
 }

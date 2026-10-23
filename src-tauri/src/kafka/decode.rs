@@ -153,12 +153,17 @@ fn to_raw_preview(buf: &[u8], format: &str) -> String {
     } else {
         let text = String::from_utf8_lossy(buf);
         // Short preview only (UI collapse / bytes); full body lives in `value`.
-        if text.len() > 400 {
-            format!("{}…", &text[..400])
-        } else {
-            text.into_owned()
-        }
+        truncate_utf8(&text, 400)
     }
+}
+
+/// Truncate to at most `max_bytes` without splitting a multi-byte UTF-8 char.
+fn truncate_utf8(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    let end = text.floor_char_boundary(max_bytes);
+    format!("{}…", &text[..end])
 }
 
 pub fn parse_json_loose(s: &str) -> Value {
@@ -180,4 +185,30 @@ pub fn strip_confluent_wire(buf: &[u8]) -> Option<(i32, &[u8])> {
     }
     let id = i32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]);
     Some((id, &buf[5..]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_utf8_mid_multibyte_does_not_panic() {
+        // '€' is 3 bytes (e2 82 ac); index 400 lands inside a char (398..401).
+        let s: String = std::iter::repeat('€').take(200).collect();
+        assert_eq!(s.len(), 600);
+        assert!(!s.is_char_boundary(400));
+        let out = truncate_utf8(&s, 400);
+        assert!(out.ends_with('…'));
+        let body = &out[..out.len() - '…'.len_utf8()];
+        assert!(body.len() <= 400);
+        assert!(body.is_char_boundary(body.len()));
+    }
+
+    #[test]
+    fn to_raw_preview_handles_long_multibyte() {
+        let s: String = std::iter::repeat('й').take(300).collect();
+        let preview = to_raw_preview(s.as_bytes(), "string");
+        assert!(preview.ends_with('…'));
+        assert!(preview.len() <= 400 + '…'.len_utf8());
+    }
 }

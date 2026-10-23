@@ -44,6 +44,7 @@ export default function TopicsSidebar({
   onTogglePin,
   subjects,
   hasRegistry,
+  onOpenSubjectInSchemas,
 }: {
   tr: Tr
   connected: boolean
@@ -56,6 +57,7 @@ export default function TopicsSidebar({
   onTogglePin: (name: string) => void
   subjects: string[]
   hasRegistry: boolean
+  onOpenSubjectInSchemas?: (subject: string) => void
 }) {
   const [topicsOpen, setTopicsOpen] = useState(() => loadTopicsOpen())
   const [topicsWidth, setTopicsWidth] = useState(() => loadTopicsWidth())
@@ -490,6 +492,14 @@ export default function TopicsSidebar({
             topic={schemaPopover.topic}
             subjects={subjects}
             hasRegistry={hasRegistry}
+            onOpenInSchemas={
+              onOpenSubjectInSchemas
+                ? (subject) => {
+                    setSchemaPopover(null)
+                    onOpenSubjectInSchemas(subject)
+                  }
+                : undefined
+            }
           />
         </div>
       )}

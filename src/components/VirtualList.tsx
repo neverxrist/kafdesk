@@ -23,6 +23,7 @@ type VirtualListProps<T> = {
 /**
  * Windowed list — only ~viewport rows in the DOM.
  * Own scroll container (flex:1). No extra deps.
+ * Row heights are remeasured via ResizeObserver (expand/collapse safe).
  */
 export default function VirtualList<T>({
   items,
@@ -37,12 +38,27 @@ export default function VirtualList<T>({
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportH, setViewportH] = useState(400)
   const measured = useRef<Map<number, number>>(new Map())
+  const rowObservers = useRef<Map<number, ResizeObserver>>(new Map())
   const [measureEpoch, setMeasureEpoch] = useState(0)
+
+  const itemsKey = useMemo(
+    () => items.map((item, i) => getKey(item, i)).join('\0'),
+    [items, getKey],
+  )
 
   useEffect(() => {
     measured.current.clear()
+    for (const ro of rowObservers.current.values()) ro.disconnect()
+    rowObservers.current.clear()
     setMeasureEpoch((n) => n + 1)
-  }, [items.length, estimateSize, gap])
+  }, [itemsKey, estimateSize, gap])
+
+  useEffect(() => {
+    return () => {
+      for (const ro of rowObservers.current.values()) ro.disconnect()
+      rowObservers.current.clear()
+    }
+  }, [])
 
   useEffect(() => {
     const el = parentRef.current
@@ -80,10 +96,15 @@ export default function VirtualList<T>({
   start = Math.max(0, start - overscan)
   end = Math.min(items.length, end + overscan)
 
-  const measureRef = useCallback(
-    (index: number, node: HTMLElement | null) => {
-      if (!node) return
-      // offsetHeight includes padding (gap) and borders; avoids margin-collapse misses.
+  const measureRef = useCallback((index: number, node: HTMLElement | null) => {
+    const prevObs = rowObservers.current.get(index)
+    if (prevObs) {
+      prevObs.disconnect()
+      rowObservers.current.delete(index)
+    }
+    if (!node) return
+
+    const apply = () => {
       const h = node.offsetHeight
       if (h <= 0) return
       const prev = measured.current.get(index)
@@ -91,9 +112,13 @@ export default function VirtualList<T>({
         measured.current.set(index, h)
         setMeasureEpoch((n) => n + 1)
       }
-    },
-    [],
-  )
+    }
+
+    apply()
+    const ro = new ResizeObserver(() => apply())
+    ro.observe(node)
+    rowObservers.current.set(index, ro)
+  }, [])
 
   return (
     <div

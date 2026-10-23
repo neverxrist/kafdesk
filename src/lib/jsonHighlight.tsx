@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { applySearchHighlight } from './searchHighlight'
 
 /** Above this size, skip tokenization — plain text avoids thousands of React nodes. */
 export const HIGHLIGHT_MAX_CHARS = 64 * 1024
@@ -11,9 +12,7 @@ function looksLikeJson(text: string): boolean {
   return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))
 }
 
-/** Lightweight JSON syntax highlight (no deps). Plain text returned as-is. */
-export function highlightMessageBody(text: string): ReactNode {
-  if (!looksLikeJson(text)) return text
+function tokenizeJson(text: string): ReactNode {
   if (text.length > HIGHLIGHT_MAX_CHARS) return text
 
   const nodes: ReactNode[] = []
@@ -52,4 +51,29 @@ export function highlightMessageBody(text: string): ReactNode {
   }
   if (last < text.length) nodes.push(text.slice(last))
   return nodes
+}
+
+/** Lightweight JSON syntax highlight (no deps). Plain text returned as-is. */
+export function highlightMessageBody(text: string, searchQuery?: string): ReactNode {
+  const q = searchQuery?.trim() ?? ''
+  let nodes: ReactNode
+  if (!looksLikeJson(text)) {
+    nodes = text
+  } else {
+    nodes = tokenizeJson(text)
+  }
+  return q ? applySearchHighlight(nodes, q) : nodes
+}
+
+/** Highlight a single JSON line / fragment (diff rows). */
+export function highlightJsonFragment(text: string, searchQuery?: string): ReactNode {
+  if (!text) return '\u00a0'
+  const q = searchQuery?.trim() ?? ''
+  let nodes: ReactNode
+  if (!/[\"{}\[\]:]/.test(text)) {
+    nodes = text
+  } else {
+    nodes = tokenizeJson(text)
+  }
+  return q ? applySearchHighlight(nodes, q) : nodes
 }

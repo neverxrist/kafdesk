@@ -22,6 +22,8 @@ export function expandProduceTemplate(template: string, index: number): string {
     uuid: crypto.randomUUID(),
     now: now.toISOString(),
     ts: String(now.getTime()),
+    /** Unix seconds — fits Avro `int` (millis do not). */
+    ts_sec: String(Math.floor(now.getTime() / 1000)),
     date: now.toISOString().slice(0, 10),
     name: `${pick(FIRST)} ${pick(LAST)}`,
     first: pick(FIRST),

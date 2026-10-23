@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import type { KafkaMessageView } from '../types/kafdesk'
 import { formatBadgeLabel, formatMessageDateTime } from '../lib/format'
 import { highlightMessageBody } from '../lib/jsonHighlight'
+import type { SearchScope } from '../lib/searchScope'
+import { highlightSearchMatches } from '../lib/searchHighlight'
 import { messageBodyText, messageId } from '../lib/messageText'
 import MessageDiffPanel from './MessageDiffPanel'
 import type { useLocale } from '../hooks/useLocale'
@@ -43,6 +45,8 @@ export default function MessageInspectorDock({
   onSelect,
   onClose,
   onRepublish,
+  searchQuery = '',
+  searchScope = 'both',
 }: {
   tr: Tr
   messages: KafkaMessageView[]
@@ -55,16 +59,27 @@ export default function MessageInspectorDock({
   onSelect: (id: string) => void
   onClose: () => void
   onRepublish?: (m: KafkaMessageView) => void
+  searchQuery?: string
+  searchScope?: SearchScope
 }) {
   const [height, setHeight] = useState(loadDockHeight)
+  const [diffOnlyChanges, setDiffOnlyChanges] = useState(false)
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const index = activeId ? messages.findIndex((m) => messageId(m) === activeId) : -1
   const active = index >= 0 ? messages[index] : null
   const diffReady = showDiff && diffMessages.length === 2
 
+  useEffect(() => {
+    if (!diffReady) setDiffOnlyChanges(false)
+  }, [diffReady])
+
+  const valueQuery = searchScope === 'key' ? '' : searchQuery
+  const keyQuery = searchScope === 'value' ? '' : searchQuery
+
   const bodyHtml = useMemo(
-    () => (active && !diffReady ? highlightMessageBody(messageBodyText(active)) : null),
-    [active, diffReady],
+    () =>
+      active && !diffReady ? highlightMessageBody(messageBodyText(active), valueQuery) : null,
+    [active, diffReady, valueQuery],
   )
 
   useEffect(() => {
@@ -187,9 +202,19 @@ export default function MessageInspectorDock({
             </button>
           )}
           {diffReady && (
-            <button type="button" className="msg-dock-action" onClick={onClearDiff}>
-              {tr('diffClear')}
-            </button>
+            <>
+              <button
+                type="button"
+                className={diffOnlyChanges ? 'msg-dock-action msg-diff-only active' : 'msg-dock-action msg-diff-only'}
+                aria-pressed={diffOnlyChanges}
+                onClick={() => setDiffOnlyChanges((v) => !v)}
+              >
+                {tr('diffOnlyChanges')}
+              </button>
+              <button type="button" className="msg-dock-action" onClick={onClearDiff}>
+                {tr('diffClear')}
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -212,6 +237,8 @@ export default function MessageInspectorDock({
             onClear={onClearDiff}
             onRemove={onToggleDiff}
             embedded
+            onlyChanges={diffOnlyChanges}
+            onOnlyChangesChange={setDiffOnlyChanges}
           />
         ) : showDiff && diffMessages.length === 1 ? (
           <div className="msg-dock-hint">
@@ -237,7 +264,11 @@ export default function MessageInspectorDock({
             {active.key != null && active.key !== '' && (
               <div className="msg-dock-key" title={String(active.key)}>
                 <em>{tr('msgKey')}</em>
-                <strong>{String(active.key)}</strong>
+                <strong>
+                  {keyQuery.trim()
+                    ? highlightSearchMatches(String(active.key), keyQuery)
+                    : String(active.key)}
+                </strong>
               </div>
             )}
             {headers.length > 0 && (

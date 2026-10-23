@@ -4,6 +4,8 @@ import { formatBadgeLabel, formatMessageDateTime } from '../lib/format'
 import { highlightMessageBody } from '../lib/jsonHighlight'
 import { messageBodyText, messageId } from '../lib/messageText'
 import type { MessageViewMode } from '../lib/messageView'
+import type { SearchScope } from '../lib/searchScope'
+import { highlightSearchMatches } from '../lib/searchHighlight'
 
 /** Collapsed preview ≈ 2 lines; shorter bodies stay fully open. */
 const PREVIEW_MAX_LINES = 2
@@ -114,6 +116,8 @@ export default function MessageCard({
   diffSlot,
   diffFull = false,
   inspected = false,
+  searchQuery = '',
+  searchScope = 'both',
   onToggleDiff,
   onRepublish,
   onInspect,
@@ -127,6 +131,9 @@ export default function MessageCard({
   diffSlot?: 1 | 2
   diffFull?: boolean
   inspected?: boolean
+  /** Live filter text — highlight matches in key / value. */
+  searchQuery?: string
+  searchScope?: SearchScope
   onToggleDiff?: (m: KafkaMessageView) => void
   onRepublish?: (m: KafkaMessageView) => void
   onInspect?: (m: KafkaMessageView) => void
@@ -164,15 +171,19 @@ export default function MessageCard({
     () => (showFullBody ? messageBodyText(m) : null),
     [m.value, showFullBody],
   )
+  const valueQuery = searchScope === 'key' ? '' : searchQuery
+  const keyQuery = searchScope === 'value' ? '' : searchQuery
+
   const highlighted = useMemo(
-    () => (fullBody != null ? highlightMessageBody(fullBody) : null),
-    [fullBody],
+    () => (fullBody != null ? highlightMessageBody(fullBody, valueQuery) : null),
+    [fullBody, valueQuery],
   )
   // Collapsed Full preview: plain truncate from cheap sample (no token spans).
   const previewPlain = useMemo(() => {
     if (showFullBody || compact) return null
-    return truncatePreview(collapseSample(m))
-  }, [m.value, m.rawPreview, showFullBody, compact])
+    const plain = truncatePreview(collapseSample(m))
+    return valueQuery.trim() ? highlightSearchMatches(plain, valueQuery) : plain
+  }, [m.value, m.rawPreview, showFullBody, compact, valueQuery])
 
   useEffect(() => {
     setExpanded(!compact && !needsCollapse)
@@ -249,9 +260,16 @@ export default function MessageCard({
 
   const keyBlock =
     m.key != null ? (
-      <span className="msg-key" title={String(m.key)}>
+      <span
+        className="msg-key allow-select"
+        title={String(m.key)}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
         <em>{keyLabel}</em>
-        <strong>{m.key}</strong>
+        <strong>
+          {keyQuery.trim() ? highlightSearchMatches(String(m.key), keyQuery) : m.key}
+        </strong>
       </span>
     ) : (
       <span className="msg-key muted">—</span>
@@ -312,34 +330,51 @@ export default function MessageCard({
       : ''
 
   if (compact) {
+    const openRow = () => {
+      const sel = window.getSelection()
+      // Don't open dock after a text selection (e.g. copying the key).
+      if (sel && !sel.isCollapsed) return
+      if (onInspect) onInspect(m)
+      else toggleExpanded()
+    }
     return (
       <article
         className={`msg msg-compact${expanded ? ' is-open' : ''}${diffClass}${inspected ? ' msg-inspected' : ''}`}
         data-msgid={id}
       >
-        <button
-          type="button"
+        <div
           className="msg-compact-row"
-          aria-expanded={expanded}
+          role={onInspect ? 'button' : undefined}
+          tabIndex={onInspect ? 0 : undefined}
           title={labels?.inspect ?? toggleLabel}
-          onClick={() => {
-            if (onInspect) onInspect(m)
-            else toggleExpanded()
-          }}
+          onClick={openRow}
+          onKeyDown={
+            onInspect
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openRow()
+                  }
+                }
+              : undefined
+          }
         >
-          <span
+          <button
+            type="button"
             className="msg-compact-chevron"
-            aria-hidden="true"
+            aria-expanded={expanded}
+            title={toggleLabel}
+            aria-label={toggleLabel}
             onClick={(e) => {
               e.stopPropagation()
               toggleExpanded()
             }}
           >
             {expanded ? '▾' : '▸'}
-          </span>
+          </button>
           {keyBlock}
-          {metaRight}
-        </button>
+          <span className="msg-compact-meta">{metaRight}</span>
+        </div>
         {expanded && (
           <>
             {actionsBlock}

@@ -1,12 +1,8 @@
 use crate::avro_codec::decode_datum_to_json;
-use crate::domain::{
-    matches_decoded_message, matches_raw_pre_filter, BrokerMessageFilter,
-};
 use crate::sr::SchemaRegistryClient;
 use crate::types::*;
 use super::decode::{
-    decode_owned_message, decode_with_avro_json, headers_from_message,
-    strip_confluent_wire,
+    decode_owned_message, decode_with_avro_json, headers_from_message, strip_confluent_wire,
 };
 use super::session::KafkaSession;
 use rdkafka::consumer::Consumer;
@@ -17,18 +13,6 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use super::session::SConsumer;
-
-fn filter_from_tail_request(request: &TailRequest) -> BrokerMessageFilter {
-    BrokerMessageFilter {
-        search: request.search.clone(),
-        search_key: request.search_key.clone(),
-        search_scope: request.search_scope.clone(),
-        header_key: request.search_header_key.clone(),
-        header_value: request.search_header_value.clone(),
-        time_from: None,
-        time_to: None,
-    }
-}
 
 impl KafkaSession {
     pub async fn start_tail(
@@ -50,17 +34,15 @@ impl KafkaSession {
         consumer
             .subscribe(&[&request.topic])
             .map_err(|e| e.to_string())?;
+
         self.tailing.store(true, Ordering::SeqCst);
 
         {
-            let mut f = self.tail_filter.lock().map_err(|e| e.to_string())?;
-            *f = filter_from_tail_request(&request);
             let mut p = self.tail_partitions.lock().map_err(|e| e.to_string())?;
             *p = request.partitions.clone();
         }
 
         let tailing = self.tailing.clone();
-        let filter = self.tail_filter.clone();
         let partitions = self.tail_partitions.clone();
         let registry = if self.sr_status == "ok" {
             self.registry.clone()
@@ -93,13 +75,6 @@ impl KafkaSession {
                             | rdkafka::Timestamp::LogAppendTime(ms) => ms,
                             _ => 0,
                         };
-                        let snap = match filter.lock() {
-                            Ok(g) => g.clone(),
-                            Err(_) => continue,
-                        };
-                        if !matches_raw_pre_filter(key, &ts.to_string(), &headers, &snap) {
-                            continue;
-                        }
                         let view = decode_tail_message(
                             &registry,
                             &mut schema_cache,
@@ -112,8 +87,9 @@ impl KafkaSession {
                             headers,
                         )
                         .await;
-                        if !matches_decoded_message(&view, &snap) {
-                            continue;
+                        // Drop anything decoded after Stop (race with abort).
+                        if !tailing.load(Ordering::SeqCst) {
+                            break;
                         }
                         let _ = app.emit("kafka://tail-message", &view);
                     }
@@ -132,19 +108,14 @@ impl KafkaSession {
         Ok(())
     }
 
-    /// Hot-swap search / key / header / partition filters without restarting the consumer.
+    /// Hot-swap partition filter without restarting the consumer.
+    /// Search/header filters are applied in the UI only (buffer stays intact).
     pub fn set_tail_filter(&self, request: &TailRequest) -> Result<(), String> {
         if !self.tailing.load(Ordering::SeqCst) {
             return Ok(());
         }
-        {
-            let mut f = self.tail_filter.lock().map_err(|e| e.to_string())?;
-            *f = filter_from_tail_request(request);
-        }
-        {
-            let mut p = self.tail_partitions.lock().map_err(|e| e.to_string())?;
-            *p = request.partitions.clone();
-        }
+        let mut p = self.tail_partitions.lock().map_err(|e| e.to_string())?;
+        *p = request.partitions.clone();
         Ok(())
     }
 
@@ -155,7 +126,6 @@ impl KafkaSession {
         }
     }
 }
-
 
 async fn decode_tail_message(
     registry: &Option<SchemaRegistryClient>,
@@ -218,4 +188,3 @@ async fn decode_tail_message(
         }
     }
 }
-

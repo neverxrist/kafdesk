@@ -6,11 +6,7 @@ import MessageSearchFilter from '../MessageSearchFilter'
 import MsgFontControls from '../MsgFontControls'
 import type { useLocale } from '../../hooks/useLocale'
 import type { SearchScope } from '../../lib/searchScope'
-import {
-  loadMessageViewMode,
-  persistMessageViewMode,
-  type MessageViewMode,
-} from '../../lib/messageView'
+import { persistMessageViewMode, type MessageViewMode } from '../../lib/messageView'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -54,7 +50,7 @@ export function TailToolbar({
         onScopeChange={setSearchScope}
         disabled={!selectedTopic}
       />
-      <div className="field" style={{ maxWidth: 120 }}>
+      <div className="field toolbar-partition-field">
         <label>{tr('partition')}</label>
         <select
           value={partitionFilter}
@@ -86,19 +82,33 @@ export default function TailPanel({
   tr,
   tailing,
   tailMessages,
+  tailBufferCount,
   selectedTopic,
+  search = '',
+  searchScope = 'both',
 }: {
   tr: Tr
   tailing: boolean
   tailMessages: KafkaMessageView[]
+  /** Raw buffer size (before display filter). */
+  tailBufferCount: number
   selectedTopic: string | null
+  search?: string
+  searchScope?: SearchScope
 }) {
-  const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
+  const [viewMode, setViewMode] = useState<MessageViewMode>('compact')
 
   function setView(mode: MessageViewMode) {
     setViewMode(mode)
     persistMessageViewMode(mode)
   }
+
+  const countLabel =
+    tailBufferCount > 0
+      ? tr('tailCount')
+          .replace('{shown}', String(tailMessages.length))
+          .replace('{buffer}', String(tailBufferCount))
+      : null
 
   return (
     <section className="messages drag-scroll">
@@ -106,7 +116,15 @@ export default function TailPanel({
         <div className="messages-panel-head">
           <div>
             <h2 style={{ margin: 0 }}>{tailing ? tr('tailRunning') : tr('tailStopped')}</h2>
-            <div className="status">{tr('tailHint')}</div>
+            <div className="status">
+              {countLabel ? (
+                <span className="tail-buf-count" title={tr('tailCountTitle')}>
+                  {countLabel}
+                  <span className="tail-buf-sep"> · </span>
+                </span>
+              ) : null}
+              {tr('tailHint')}
+            </div>
           </div>
           <div className="messages-panel-controls">
             <MsgFontControls tr={tr} />
@@ -136,9 +154,11 @@ export default function TailPanel({
           hint={
             !selectedTopic
               ? tr('emptyEventsHint')
-              : tailing
-                ? tr('emptyEventsWaiting')
-                : tr('emptyEventsStartTail')
+              : tailBufferCount > 0
+                ? tr('emptyEventsFilter')
+                : tailing
+                  ? tr('emptyEventsWaiting')
+                  : tr('emptyEventsStartTail')
           }
         />
       )}
@@ -148,6 +168,8 @@ export default function TailPanel({
           message={m}
           keyLabel={tr('msgKey')}
           viewMode={viewMode}
+          searchQuery={search}
+          searchScope={searchScope}
           labels={{
             republish: '',
             diffSelect: '',

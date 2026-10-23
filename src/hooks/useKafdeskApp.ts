@@ -132,6 +132,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [tab, setTab] = useState<
     'consume' | 'produce' | 'groups' | 'schemas' | 'tail' | 'logs' | 'settings'
   >('consume')
+  /** One-shot subject focus when opening Schemas from topic schema popover. */
+  const [schemasFocusSubject, setSchemasFocusSubject] = useState<string | null>(null)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [produceFormat, setProduceFormat] = useState<
     'avro' | 'avro-local' | 'json' | 'string'
@@ -167,6 +169,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [updateAuto, setUpdateAuto] = useState(false)
 
   const [tailing, setTailing] = useState(false)
+  const tailingRef = useRef(false)
   const [tailMessages, setTailMessages] = useState<KafkaMessageView[]>([])
 
   const [authSession, setAuthSession] = useState<AuthSessionPublic>({
@@ -227,6 +230,8 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     void window.kafdesk.updateSettings?.().then((s) => setUpdateAuto(s.autoUpdate))
     void refreshStoredCreds()
     const offTail = window.kafdesk.onTailMessage((msg) => {
+      // Ignore late emits after Stop (in-flight decode / IPC race).
+      if (!tailingRef.current) return
       const slim = slimMessageForUi(msg)
       const id = messageId(slim)
       setTailMessages((prev) => {
@@ -235,6 +240,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       })
     })
     const offTailErr = window.kafdesk.onTailError?.((message) => {
+      tailingRef.current = false
       setTailing(false)
       setError(message)
       pushLog('error', `Tail failed: ${message}`)
@@ -676,6 +682,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setSrStatus('none')
       setTopics([])
       setSubjects([])
+      tailingRef.current = false
       setTailing(false)
       setTailMessages([])
       setSelectedTopic(null)
@@ -707,6 +714,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         } catch {
           /* ignore */
         }
+        tailingRef.current = false
         setTailing(false)
         setTailMessages([])
       }
@@ -810,6 +818,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setGroups([])
       setSelectedGroup(null)
       setGroupOffsets([])
+      tailingRef.current = false
       setTailing(false)
       setTailMessages([])
     } catch (err) {
@@ -928,6 +937,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     try {
       if (tailing) {
         await window.kafdesk.tailStop()
+        tailingRef.current = false
         setTailing(false)
       }
       try {
@@ -992,6 +1002,14 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setMessages([])
       clearDiff()
     }
+    if (prev === 'tail' && next !== 'tail') {
+      setTailMessages([])
+      if (tailing) {
+        tailingRef.current = false
+        setTailing(false)
+        void window.kafdesk.tailStop().catch(() => {})
+      }
+    }
     if (
       next === 'consume' &&
       prev !== 'consume' &&
@@ -1009,6 +1027,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setProduceFormat('avro')
     void onSubjectChange(subjectName)
     changeTab('produce')
+  }
+
+  function openSubjectInSchemas(subjectName: string) {
+    setSchemasFocusSubject(subjectName)
+    changeTab('schemas')
   }
 
   function saveCurrentQuery(name: string) {
@@ -1081,6 +1104,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     try {
       if (tailing) {
         await window.kafdesk.tailStop()
+        tailingRef.current = false
         setTailing(false)
       }
       const details = offsetsFrom ?? topicDetails
@@ -1312,40 +1336,36 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setBusy(true)
     setError(null)
     try {
-      setTailMessages([])
+      // Keep UI buffer; always attach at latest (no catch-up dump of the Stop gap).
       await window.kafdesk.tailStart(buildTailRequest(selectedTopic))
+      tailingRef.current = true
       setTailing(true)
     } catch (err) {
+      tailingRef.current = false
+      setTailing(false)
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
   }
 
-  // Hot-swap Rust filters while running + prune already-buffered rows to match.
+  // Hot-swap partition filter while running. Search/header stay UI-only (no buffer prune).
   useEffect(() => {
     if (!tailing || !selectedTopic || !window.kafdesk?.tailSetFilter) return
     const t = window.setTimeout(() => {
       void window.kafdesk.tailSetFilter(buildTailRequest(selectedTopic)).catch(() => {})
-      setTailMessages((prev) =>
-        filterMessages(prev, {
-          search,
-          searchKey,
-          searchScope,
-          headerKey,
-          headerValue,
-        }),
-      )
     }, 250)
     return () => window.clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to filter fields while tailing
-  }, [tailing, selectedTopic, search, searchScope, headerKey, headerValue, partitionFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- partition filter while tailing
+  }, [tailing, selectedTopic, partitionFilter])
 
   async function stopTail() {
+    // Flip gate first so late kafka://tail-message events are dropped.
+    tailingRef.current = false
+    setTailing(false)
     setBusy(true)
     try {
       await window.kafdesk.tailStop()
-      setTailing(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -1505,6 +1525,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTab: changeTab,
     refreshSubjects,
     useSubjectForProduce,
+    openSubjectInSchemas,
+    schemasFocusSubject,
+    clearSchemasFocusSubject: () => setSchemasFocusSubject(null),
     selectedTopic,
     topicDetails,
     topicGroupLags,
@@ -1547,6 +1570,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     partitionFilter,
     setPartitionFilter: setPartitionFilterUI,
     tailing,
+    tailBufferCount: tailMessages.length,
     tailMessages: filterMessages(tailMessages, {
       search,
       searchKey,

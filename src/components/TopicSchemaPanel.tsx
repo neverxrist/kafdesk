@@ -25,6 +25,7 @@ export default function TopicSchemaPanel({
   subjects,
   hasRegistry,
   onUseSubject,
+  onOpenInSchemas,
   defaultOpen,
 }: {
   tr: Tr
@@ -33,6 +34,8 @@ export default function TopicSchemaPanel({
   hasRegistry: boolean
   /** Produce: set subject (+ usually switch to Avro SR). */
   onUseSubject?: (subject: string) => void
+  /** Consume popover: jump to Schemas tab with this subject selected. */
+  onOpenInSchemas?: (subject: string) => void
   /** When false, start collapsed. When omitted, open once subjects are found (produce). */
   defaultOpen?: boolean
 }) {
@@ -183,6 +186,16 @@ export default function TopicSchemaPanel({
                 title={tr('topicSchemaUseTitle')}
               >
                 {tr('topicSchemaUse')}
+              </button>
+            )}
+            {onOpenInSchemas && (
+              <button
+                type="button"
+                disabled={!picked || loading}
+                onClick={() => onOpenInSchemas(picked)}
+                title={tr('topicSchemaOpenTabTitle')}
+              >
+                {tr('topicSchemaOpenTab')}
               </button>
             )}
           </div>
