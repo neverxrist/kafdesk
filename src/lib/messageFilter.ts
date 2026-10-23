@@ -1,12 +1,16 @@
 import type { KafkaMessageView } from '../types/kafdesk'
 import { timeInputToMs } from './savedQueries'
-import type { SearchScope } from './searchScope'
-import { uiSearchFromStored, wireSearch } from './searchScope'
+import type { SearchClause, SearchScope } from './searchScope'
+import { searchClauseActive, uiSearchFromStored, wireSearch } from './searchScope'
 
 export interface ClientMessageFilter {
   search?: string
   searchKey?: string
   searchScope?: SearchScope
+  /** Optional second AND clause (UI-only; not saved in queries). */
+  search2?: string
+  searchScope2?: SearchScope
+  dualSearch?: boolean
   headerKey?: string
   headerValue?: string
   /** datetime-local string — filtered on the loaded window only */
@@ -24,26 +28,41 @@ function valueHaystack(m: KafkaMessageView): string {
   return `${m.rawPreview} ${JSON.stringify(m.value)}`.toLowerCase()
 }
 
+function matchesClause(m: KafkaMessageView, text: string, scope: SearchScope): boolean {
+  const needle = text.trim().toLowerCase()
+  if (!needle) return true
+  const keyText = (m.key || '').toLowerCase()
+  if (scope === 'key') return keyText.includes(needle)
+  if (scope === 'value') return valueHaystack(m).includes(needle)
+  return `${keyText} ${valueHaystack(m)}`.includes(needle)
+}
+
+/** Active AND clauses from filter state (empty text = no-op). */
+export function clientSearchClauses(f: ClientMessageFilter): SearchClause[] {
+  const primary = uiSearchFromStored(f.search ?? '', f.searchKey ?? '', f.searchScope)
+  const clauses: SearchClause[] = [{ text: primary.text, scope: primary.scope }]
+  if (f.dualSearch) {
+    const scope2 =
+      f.searchScope2 === 'key' || f.searchScope2 === 'value' || f.searchScope2 === 'both'
+        ? f.searchScope2
+        : 'both'
+    clauses.push({ text: f.search2 ?? '', scope: scope2 })
+  }
+  return clauses
+}
+
 /** Client-side filter over an already loaded consume window (not a broker re-fetch). */
 export function messageMatchesClientFilter(
   m: KafkaMessageView,
   f: ClientMessageFilter,
 ): boolean {
-  const { text, scope } = uiSearchFromStored(f.search ?? '', f.searchKey ?? '', f.searchScope)
-  const needle = text.trim().toLowerCase()
+  for (const c of clientSearchClauses(f)) {
+    if (!searchClauseActive(c)) continue
+    if (!matchesClause(m, c.text, c.scope)) return false
+  }
+
   const headerKey = f.headerKey?.trim().toLowerCase()
   const headerValue = f.headerValue?.trim().toLowerCase()
-
-  if (needle) {
-    const keyText = (m.key || '').toLowerCase()
-    const ok =
-      scope === 'key'
-        ? keyText.includes(needle)
-        : scope === 'value'
-          ? valueHaystack(m).includes(needle)
-          : `${keyText} ${valueHaystack(m)}`.includes(needle)
-    if (!ok) return false
-  }
 
   if (headerKey || headerValue) {
     const entries = Object.entries(m.headers || {})
@@ -69,13 +88,16 @@ export function messageMatchesClientFilter(
   return true
 }
 
+function clientContentFilterActive(f: ClientMessageFilter): boolean {
+  return clientSearchClauses(f).some(searchClauseActive)
+}
+
 export function filterMessages(
   messages: KafkaMessageView[],
   f: ClientMessageFilter,
 ): KafkaMessageView[] {
-  const { text } = uiSearchFromStored(f.search ?? '', f.searchKey ?? '', f.searchScope)
   const active =
-    Boolean(text.trim()) ||
+    clientContentFilterActive(f) ||
     Boolean(f.headerKey?.trim()) ||
     Boolean(f.headerValue?.trim()) ||
     Boolean(f.timeFrom?.trim()) ||
@@ -85,9 +107,8 @@ export function filterMessages(
 }
 
 export function clientFilterActive(f: ClientMessageFilter): boolean {
-  const { text } = uiSearchFromStored(f.search ?? '', f.searchKey ?? '', f.searchScope)
   return (
-    Boolean(text.trim()) ||
+    clientContentFilterActive(f) ||
     Boolean(f.headerKey?.trim()) ||
     Boolean(f.headerValue?.trim()) ||
     Boolean(f.timeFrom?.trim()) ||
@@ -95,7 +116,7 @@ export function clientFilterActive(f: ClientMessageFilter): boolean {
   )
 }
 
-/** Expand filter state into IPC search fields. */
+/** Expand filter state into IPC search fields (first clause only). */
 export function wireClientSearch(f: {
   search: string
   searchKey: string

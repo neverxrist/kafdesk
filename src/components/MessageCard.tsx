@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import type { KafkaMessageView } from '../types/kafdesk'
 import { formatBadgeLabel, formatMessageDateTime } from '../lib/format'
 import { highlightMessageBody } from '../lib/jsonHighlight'
+import { messageBodyTextFiltered } from '../lib/jsonSearchFilter'
 import { messageBodyText, messageId } from '../lib/messageText'
 import type { MessageViewMode } from '../lib/messageView'
-import type { SearchScope } from '../lib/searchScope'
+import { searchHighlightQueries, searchHitsNeedles, type SearchClause } from '../lib/searchScope'
 import { highlightSearchMatches } from '../lib/searchHighlight'
 
 /** Collapsed preview ≈ 2 lines; shorter bodies stay fully open. */
@@ -116,8 +117,8 @@ export default function MessageCard({
   diffSlot,
   diffFull = false,
   inspected = false,
-  searchQuery = '',
-  searchScope = 'both',
+  searchClauses = [],
+  searchHitsOn = [false, false],
   onToggleDiff,
   onRepublish,
   onInspect,
@@ -131,9 +132,10 @@ export default function MessageCard({
   diffSlot?: 1 | 2
   diffFull?: boolean
   inspected?: boolean
-  /** Live filter text — highlight matches in key / value. */
-  searchQuery?: string
-  searchScope?: SearchScope
+  /** Live AND filter clauses — highlight. */
+  searchClauses?: SearchClause[]
+  /** Per-row Hits toggles (same order as searchClauses). */
+  searchHitsOn?: [boolean, boolean]
   onToggleDiff?: (m: KafkaMessageView) => void
   onRepublish?: (m: KafkaMessageView) => void
   onInspect?: (m: KafkaMessageView) => void
@@ -166,24 +168,29 @@ export default function MessageCard({
     : labels?.expand ?? 'Expand'
   const showFullBody = compact ? expanded : expanded || !needsCollapse
 
+  const { keyQueries, valueQueries } = searchHighlightQueries(searchClauses)
+  const hitsQueries = useMemo(
+    () => searchHitsNeedles(searchClauses, searchHitsOn),
+    [searchClauses, searchHitsOn],
+  )
+  const matchesOnly = hitsQueries.length > 0
+
   // Pretty body + highlight only when the full body is on screen (RAM).
   const fullBody = useMemo(
-    () => (showFullBody ? messageBodyText(m) : null),
-    [m.value, showFullBody],
+    () => (showFullBody ? messageBodyTextFiltered(m, hitsQueries, matchesOnly) : null),
+    [m.value, m.rawPreview, showFullBody, hitsQueries, matchesOnly],
   )
-  const valueQuery = searchScope === 'key' ? '' : searchQuery
-  const keyQuery = searchScope === 'value' ? '' : searchQuery
 
   const highlighted = useMemo(
-    () => (fullBody != null ? highlightMessageBody(fullBody, valueQuery) : null),
-    [fullBody, valueQuery],
+    () => (fullBody != null ? highlightMessageBody(fullBody, valueQueries) : null),
+    [fullBody, valueQueries],
   )
   // Collapsed Full preview: plain truncate from cheap sample (no token spans).
   const previewPlain = useMemo(() => {
     if (showFullBody || compact) return null
     const plain = truncatePreview(collapseSample(m))
-    return valueQuery.trim() ? highlightSearchMatches(plain, valueQuery) : plain
-  }, [m.value, m.rawPreview, showFullBody, compact, valueQuery])
+    return valueQueries.length ? highlightSearchMatches(plain, valueQueries) : plain
+  }, [m.value, m.rawPreview, showFullBody, compact, valueQueries])
 
   useEffect(() => {
     setExpanded(!compact && !needsCollapse)
@@ -268,7 +275,7 @@ export default function MessageCard({
       >
         <em>{keyLabel}</em>
         <strong>
-          {keyQuery.trim() ? highlightSearchMatches(String(m.key), keyQuery) : m.key}
+          {keyQueries.length ? highlightSearchMatches(String(m.key), keyQueries) : m.key}
         </strong>
       </span>
     ) : (

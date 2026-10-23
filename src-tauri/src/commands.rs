@@ -584,6 +584,50 @@ pub async fn dialog_pick_avsc_file(app: AppHandle) -> Result<Option<AvscFile>, S
     }))
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveTextFileFilter {
+    pub name: String,
+    pub extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveTextFileRequest {
+    pub contents: String,
+    #[serde(default)]
+    pub default_path: Option<String>,
+    #[serde(default)]
+    pub filters: Option<Vec<SaveTextFileFilter>>,
+}
+
+/// Native save dialog; returns written path or null if cancelled.
+#[tauri::command]
+pub async fn dialog_save_text_file(
+    app: AppHandle,
+    request: SaveTextFileRequest,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut dialog = app.dialog().file();
+    if let Some(name) = request.default_path.as_ref().filter(|s| !s.is_empty()) {
+        dialog = dialog.set_file_name(name);
+    }
+    if let Some(filters) = &request.filters {
+        for f in filters {
+            let exts: Vec<&str> = f.extensions.iter().map(|s| s.as_str()).collect();
+            if !exts.is_empty() {
+                dialog = dialog.add_filter(&f.name, &exts);
+            }
+        }
+    }
+    let path = dialog.blocking_save_file();
+    let Some(p) = path.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    std::fs::write(&p, request.contents.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(Some(p.display().to_string()))
+}
+
 #[tauri::command]
 pub fn auth_list_providers(state: State<'_, Arc<AppState>>) -> Vec<AuthProviderInfo> {
     state.auth.list_providers()

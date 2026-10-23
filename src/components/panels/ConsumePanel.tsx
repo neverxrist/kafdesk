@@ -20,8 +20,9 @@ import {
   type BatchTimeSort,
   type MessageViewMode,
 } from '../../lib/messageView'
-import MessageSearchFilter from '../MessageSearchFilter'
-import type { SearchScope } from '../../lib/searchScope'
+import { DualMessageSearchFilters } from '../MessageSearchFilter'
+import BatchExportControls from '../BatchExportControls'
+import type { SearchClause, SearchScope } from '../../lib/searchScope'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
@@ -35,6 +36,15 @@ export function ConsumeToolbar({
   setSearch,
   searchScope,
   setSearchScope,
+  search2,
+  setSearch2,
+  searchScope2,
+  setSearchScope2,
+  dualSearch,
+  onOpenDualSearch,
+  onCloseDualSearch,
+  searchHitsOn,
+  onSearchHitsSlot,
   headerKey,
   setHeaderKey,
   headerValue,
@@ -65,6 +75,15 @@ export function ConsumeToolbar({
   setSearch: (v: string) => void
   searchScope: SearchScope
   setSearchScope: (v: SearchScope) => void
+  search2: string
+  setSearch2: (v: string) => void
+  searchScope2: SearchScope
+  setSearchScope2: (v: SearchScope) => void
+  dualSearch: boolean
+  onOpenDualSearch: () => void
+  onCloseDualSearch: () => void
+  searchHitsOn: [boolean, boolean]
+  onSearchHitsSlot: (slot: 0 | 1, on: boolean) => void
   headerKey: string
   setHeaderKey: (v: string) => void
   headerValue: string
@@ -119,13 +138,22 @@ export function ConsumeToolbar({
         <div className="toolbar-zone toolbar-zone-filter">
           <span className="toolbar-zone-label">{tr('filterTag')}</span>
           <div className="toolbar-zone-fields">
-            <MessageSearchFilter
+            <DualMessageSearchFilters
               tr={tr}
-              id="consume-search"
-              value={search}
-              scope={searchScope}
-              onChange={setSearch}
-              onScopeChange={setSearchScope}
+              idPrefix="consume"
+              search={search}
+              searchScope={searchScope}
+              setSearch={setSearch}
+              setSearchScope={setSearchScope}
+              search2={search2}
+              searchScope2={searchScope2}
+              setSearch2={setSearch2}
+              setSearchScope2={setSearchScope2}
+              dualSearch={dualSearch}
+              onOpenDual={onOpenDualSearch}
+              onCloseDual={onCloseDualSearch}
+              hitsOn={searchHitsOn}
+              onHitsOn={onSearchHitsSlot}
               disabled={!selectedTopic}
               maxLength={FILTER_MAX}
             />
@@ -419,8 +447,8 @@ export default function ConsumePanel({
   onClearDiff,
   onRepublish,
   onOpenConsumerGroup,
-  search = '',
-  searchScope = 'both',
+  searchClauses = [],
+  searchHitsOn = [false, false],
 }: {
   tr: Tr
   topicDetails: TopicInfo | null
@@ -437,8 +465,8 @@ export default function ConsumePanel({
   onClearDiff: () => void
   onRepublish: (m: KafkaMessageView) => void
   onOpenConsumerGroup?: (groupId: string) => void
-  search?: string
-  searchScope?: SearchScope
+  searchClauses?: SearchClause[]
+  searchHitsOn?: [boolean, boolean]
 }) {
   const [hiddenPartitions, setHiddenPartitions] = useState<Set<number>>(() => new Set())
   const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
@@ -598,8 +626,8 @@ export default function ConsumePanel({
         diffSlot={diffSlot}
         diffFull={diffFull}
         inspected={dockOpen && inspectId === id}
-        searchQuery={search}
-        searchScope={searchScope}
+        searchClauses={searchClauses}
+        searchHitsOn={searchHitsOn}
         onToggleDiff={dockShowDiff ? undefined : onToggleDiff}
         onRepublish={onRepublish}
         onInspect={canInspect ? openInspect : undefined}
@@ -656,6 +684,16 @@ export default function ConsumePanel({
                       </button>
                     )
                   })}
+                  <button
+                    type="button"
+                    className={`batch-sort-btn group-by-partitions-btn${groupByPartitions ? ' active' : ''}`}
+                    title={tr('groupByPartitions')}
+                    aria-label={tr('groupByPartitions')}
+                    aria-pressed={groupByPartitions}
+                    onClick={() => setGroupBy(!groupByPartitions)}
+                  >
+                    <GroupByPartitionsIcon />
+                  </button>
                 </div>
                 {(topicGroupLags == null || topicGroupLags.length > 0) && (
                   <div className="topic-lag-row" title={tr('topicConsumersLabel')}>
@@ -680,14 +718,6 @@ export default function ConsumePanel({
                 )}
               </div>
               <div className="messages-panel-controls">
-                <label className="message-group-opt">
-                  <input
-                    type="checkbox"
-                    checked={groupByPartitions}
-                    onChange={(e) => setGroupBy(e.target.checked)}
-                  />
-                  {tr('groupByPartitions')}
-                </label>
                 <button
                   type="button"
                   className="batch-sort-btn"
@@ -698,6 +728,7 @@ export default function ConsumePanel({
                   <BatchSortIcon newestFirst={newestFirst} />
                 </button>
                 <MsgFontControls tr={tr} />
+                <BatchExportControls tr={tr} messages={flatMessages} topic={selectedTopic} />
                 <div className="message-view-toggle" role="group" aria-label={tr('messageView')}>
                   <button
                     type="button"
@@ -797,8 +828,8 @@ export default function ConsumePanel({
             setDockDiff(false)
           }}
           onRepublish={onRepublish}
-          searchQuery={search}
-          searchScope={searchScope}
+          searchClauses={searchClauses}
+          searchHitsOn={searchHitsOn}
         />
       )}
     </section>
@@ -812,6 +843,21 @@ function MoreFiltersIcon() {
         fill="currentColor"
         d="M2.4 3.2h11.2l-3.9 4.7v3.4L6.3 13.2V7.9L2.4 3.2z"
         opacity="0.9"
+      />
+    </svg>
+  )
+}
+
+/** Stacked sections — group the batch by partition. */
+function GroupByPartitionsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        d="M2.5 3.25h11M2.5 4.85h7.5M2.5 7.75h11M2.5 9.35h7.5M2.5 12.25h11M2.5 13.85h7.5"
       />
     </svg>
   )

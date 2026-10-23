@@ -38,6 +38,12 @@ export type KafDeskApi = {
   produceBatch: (request: ProduceBatchRequest) => Promise<ProduceBatchResult>
   pickPemFile: () => Promise<string | null>
   pickAvscFile: () => Promise<{ path: string; text: string } | null>
+  /** Native save dialog; returns path or null if cancelled. */
+  saveTextFile: (request: {
+    contents: string
+    defaultPath?: string
+    filters?: Array<{ name: string; extensions: string[] }>
+  }) => Promise<string | null>
   listSubjects: () => Promise<string[]>
   getLatestSchema: (subject: string) => Promise<SchemaSubjectInfo>
   listConsumerGroups: () => Promise<ConsumerGroupInfo[]>

@@ -6,8 +6,8 @@ use super::decode::{
 };
 use crate::sr::SchemaRegistryClient;
 use crate::types::*;
+use super::consume_ctx::KafdeskCtx;
 use rdkafka::admin::AdminClient;
-use rdkafka::client::DefaultClientContext;
 #[allow(unused_imports)]
 use rdkafka::config::{ClientConfig, FromClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{BaseConsumer, Consumer, StreamConsumer};
@@ -18,10 +18,10 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-pub(crate) type Admin = AdminClient<DefaultClientContext>;
-pub(crate) type Producer = FutureProducer;
-pub(crate) type BConsumer = BaseConsumer;
-pub(crate) type SConsumer = StreamConsumer;
+pub(crate) type Admin = AdminClient<KafdeskCtx>;
+pub(crate) type Producer = FutureProducer<KafdeskCtx>;
+pub(crate) type BConsumer = BaseConsumer<KafdeskCtx>;
+pub(crate) type SConsumer = StreamConsumer<KafdeskCtx>;
 
 pub struct KafkaSession {
     pub config: Option<ClusterConfig>,
@@ -94,7 +94,8 @@ impl KafkaSession {
         // Prefer fresh leaders — stale metadata → NotLeaderForPartition on watermarks.
         c.set("metadata.max.age.ms", "5000");
         c.set("topic.metadata.refresh.interval.ms", "10000");
-        c.create::<BConsumer>().map_err(|e| e.to_string())
+        c.create_with_context(KafdeskCtx::default())
+            .map_err(|e| e.to_string())
     }
     pub async fn connect(
         &mut self,
@@ -109,8 +110,12 @@ impl KafkaSession {
             .clone()
             .unwrap_or_else(|| "kafdesk".into());
 
-        let producer: Producer = base.create().map_err(|e| format!("producer: {e}"))?;
-        let admin: Admin = base.create().map_err(|e| format!("admin: {e}"))?;
+        let producer: Producer = base
+            .create_with_context(KafdeskCtx::default())
+            .map_err(|e| format!("producer: {e}"))?;
+        let admin: Admin = base
+            .create_with_context(KafdeskCtx::default())
+            .map_err(|e| format!("admin: {e}"))?;
 
         let mut probe_cfg = base.clone();
         probe_cfg.set(
@@ -119,7 +124,7 @@ impl KafkaSession {
         );
         probe_cfg.set("enable.auto.commit", "false");
         let consumer: BConsumer = probe_cfg
-            .create()
+            .create_with_context(KafdeskCtx::default())
             .map_err(|e| format!("probe consumer: {e}"))?;
         consumer
             .fetch_metadata(None, Duration::from_secs(10))

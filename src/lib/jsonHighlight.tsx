@@ -53,27 +53,35 @@ function tokenizeJson(text: string): ReactNode {
   return nodes
 }
 
+function normalizeSearchQueries(searchQuery?: string | string[]): string[] {
+  if (searchQuery == null) return []
+  const list = Array.isArray(searchQuery) ? searchQuery : [searchQuery]
+  return list.map((q) => q.trim()).filter(Boolean)
+}
+
 /** Lightweight JSON syntax highlight (no deps). Plain text returned as-is. */
-export function highlightMessageBody(text: string, searchQuery?: string): ReactNode {
-  const q = searchQuery?.trim() ?? ''
+export function highlightMessageBody(text: string, searchQuery?: string | string[]): ReactNode {
+  const queries = normalizeSearchQueries(searchQuery)
   let nodes: ReactNode
   if (!looksLikeJson(text)) {
     nodes = text
   } else {
     nodes = tokenizeJson(text)
   }
-  return q ? applySearchHighlight(nodes, q) : nodes
+  for (const q of queries) nodes = applySearchHighlight(nodes, q)
+  return nodes
 }
 
 /** Highlight a single JSON line / fragment (diff rows). */
-export function highlightJsonFragment(text: string, searchQuery?: string): ReactNode {
+export function highlightJsonFragment(text: string, searchQuery?: string | string[]): ReactNode {
   if (!text) return '\u00a0'
-  const q = searchQuery?.trim() ?? ''
+  const queries = normalizeSearchQueries(searchQuery)
   let nodes: ReactNode
   if (!/[\"{}\[\]:]/.test(text)) {
     nodes = text
   } else {
     nodes = tokenizeJson(text)
   }
-  return q ? applySearchHighlight(nodes, q) : nodes
+  for (const q of queries) nodes = applySearchHighlight(nodes, q)
+  return nodes
 }

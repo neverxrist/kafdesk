@@ -51,6 +51,7 @@ export function installTauriKafdesk(): void {
     produceBatch: (request: ProduceBatchRequest) => invoke('kafka_produce_batch', { request }),
     pickPemFile: () => invoke('dialog_pick_pem_file'),
     pickAvscFile: () => invoke('dialog_pick_avsc_file'),
+    saveTextFile: (request) => invoke('dialog_save_text_file', { request }),
     listSubjects: () => invoke('kafka_list_subjects'),
     getLatestSchema: (subject: string) => invoke('kafka_get_latest_schema', { subject }),
     listConsumerGroups: () => invoke('kafka_list_consumer_groups'),

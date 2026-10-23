@@ -822,9 +822,21 @@ textarea:focus {
   color: var(--muted);
 }
 
+.produce-type-hint.is-warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+  color: color-mix(in srgb, var(--warn) 70%, var(--text));
+}
+
 .produce-type-hint .badge {
   flex-shrink: 0;
   margin-top: 0.1rem;
+}
+
+.produce-type-hint .badge.warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
 }
 
 .field-hint {
@@ -1476,6 +1488,31 @@ body.conn-reordering * {
 .path-browse-input input {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Browse-only path: no typing caret; filename shown, full path in title. */
+.path-browse-input input[readonly] {
+  caret-color: transparent;
+  cursor: default;
+  color: var(--text);
+}
+
+.path-browse-input.has-path input[readonly] {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--input-bg, var(--bg-soft)));
+  font-weight: 600;
+}
+
+.path-browse-input input[readonly]::placeholder {
+  color: var(--muted);
+}
+
+.path-browse-input input[readonly]:focus {
+  /* Keep focus ring for a11y, but don't look like a text editor. */
+  cursor: default;
 }
 
 .path-browse-btn {
@@ -1499,18 +1536,19 @@ body.conn-reordering * {
 
 .password-input input {
   width: 100%;
-  padding-right: 2.4rem;
+  /* Beat `.sidebar > .panel input { padding: … }` so the eye doesn't cover discs. */
+  padding-right: 2.75rem !important;
 }
 
 /* Mask without type=password — avoids missing bullet glyphs in WKWebView */
 .password-input input.is-masked {
   -webkit-text-security: disc;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
 }
 
 .password-toggle {
   position: absolute;
-  right: 0.35rem;
+  right: 0.25rem;
   top: 50%;
   transform: translateY(-50%);
   width: 2rem;
@@ -1523,6 +1561,7 @@ body.conn-reordering * {
   border-color: transparent;
   color: var(--muted);
   box-shadow: none;
+  z-index: 1;
 }
 
 .password-toggle:hover {
@@ -1668,9 +1707,30 @@ body.conn-reordering * {
   min-width: 0;
 }
 
+/* Pack FILTER label + controls together, flush against SEEK (not stretched). */
 .toolbar-zone-filter {
   flex: 0 0 auto;
-  padding-right: 0.85rem;
+  align-items: center;
+  min-width: 0;
+  margin-left: auto;
+  padding-right: 0.55rem;
+}
+
+.toolbar-zone-filter .toolbar-zone-label {
+  align-self: center;
+  height: auto;
+  /* Optical: vertical-rl + rotate sits a hair low vs adjacent controls. */
+  position: relative;
+  top: -2px;
+}
+
+.toolbar-zone-filter .toolbar-zone-fields {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .toolbar-zone-seek {
@@ -1869,9 +1929,10 @@ body.conn-reordering * {
 }
 
 .toolbar-search-combo {
-  flex: 0 0 auto;
-  width: 32rem;
-  max-width: 32rem;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 34rem;
 }
 
 .toolbar-search-row {
@@ -1879,17 +1940,113 @@ body.conn-reordering * {
   align-items: stretch;
   gap: 0.4rem;
   min-width: 0;
+  width: 100%;
 }
 
-.toolbar-search-row > input {
+.toolbar-search-input-shell {
+  flex: 1 1 auto;
+  min-width: 10rem;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  overflow: hidden;
+}
+
+.toolbar-search-input-shell:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.toolbar-search-input-shell input {
   flex: 1 1 auto;
   min-width: 0;
-  width: 0; /* share row with scope toggle, don't grow past combo */
+  width: 0;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding-right: 0.35rem !important;
 }
 
-.search-scope-toggle {
+.toolbar-search-input-shell.has-hits input {
+  padding-right: 0.15rem !important;
+}
+
+.search-scope-toggle-btn {
   flex: 0 0 auto;
   align-self: stretch;
+  min-width: 3.4rem;
+  margin: 0;
+  padding: 0 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 14%, var(--input-bg));
+  color: var(--text);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.search-scope-toggle-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.search-scope-toggle-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.search-scope-toggle-btn.scope-key {
+  background: color-mix(in srgb, var(--accent) 18%, var(--input-bg));
+}
+
+.search-scope-toggle-btn.scope-value {
+  background: color-mix(in srgb, var(--warn) 14%, var(--input-bg));
+}
+
+.search-matches-only {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 0.5rem !important;
+  border: none !important;
+  border-left: 1px solid var(--border) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  font-size: 0.68rem !important;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  box-shadow: none !important;
+}
+
+.search-matches-only:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-soft) 70%, transparent) !important;
+}
+
+.search-matches-only.active {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent) !important;
+}
+
+.toolbar-search-input-shell.hits-on {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+}
+
+.search-matches-only:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .toolbar-seek-field {
@@ -1903,10 +2060,164 @@ body.conn-reordering * {
 }
 
 /* Beat `.toolbar .field { flex: 1 }` so Partition stays compact. */
+.toolbar-tail {
+  justify-content: flex-end;
+}
+
+.toolbar-tail-filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-left: auto;
+  min-width: 0;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+.toolbar-tail-filters .field {
+  margin: 0;
+  gap: 0.28rem;
+}
+
+.toolbar-tail-filters .field label {
+  display: block;
+  height: 0.85rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  line-height: 0.85rem;
+  white-space: nowrap;
+}
+
+.toolbar-tail-filters .dual-search-filters {
+  margin-left: 0;
+  min-width: 14rem;
+  max-width: none;
+}
+
+.toolbar-tail-filters .toolbar-search-combo {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+}
+
+.toolbar-tail-filters .toolbar-search-row {
+  height: 2rem;
+  align-items: stretch;
+}
+
+.toolbar-tail-filters .search-scope-toggle-btn,
+.toolbar-tail-filters .toolbar-search-input-shell {
+  height: 2rem;
+  min-height: 2rem;
+  box-sizing: border-box;
+}
+
+.toolbar-search-combo-nolabel {
+  gap: 0;
+}
+
+.dual-search-filters {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
+  margin-left: 0;
+}
+
+.dual-search-and {
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: lowercase;
+  user-select: none;
+  padding: 0 0.1rem;
+}
+
+.dual-search-filters > .toolbar-search-combo {
+  flex: 0 0 auto;
+  width: 20rem;
+  max-width: min(20rem, 36vw);
+  min-width: 0;
+  margin: 0;
+}
+
+.dual-search-filters:not(.dual) > .toolbar-search-combo {
+  width: 24rem;
+  max-width: min(24rem, 44vw);
+}
+
+/* Dual: equal input shells — − sits outside the shell, must not shrink field 2. */
+.dual-search-filters.dual > .toolbar-search-combo {
+  width: auto;
+  max-width: none;
+}
+
+.dual-search-filters.dual .toolbar-search-input-shell {
+  flex: 0 0 auto;
+  width: 16rem;
+  min-width: 12rem;
+  max-width: min(16rem, 28vw);
+}
+
+/* Same flex row as Key/Value + input shell — stretch to that height. */
+/* Beat `.toolbar button` padding so +/- matches the input shell height. */
+.toolbar .dual-search-add {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 2rem;
+  min-width: 2rem;
+  min-height: 0;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar .dual-search-add:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.toolbar .dual-search-add:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.toolbar .dual-search-remove {
+  color: var(--danger);
+}
+
+.toolbar-zone-filter .toolbar-search-combo {
+  max-width: none;
+}
+
+/* Beat `.toolbar .field { flex: 1 }` — keep partition compact but label-wide. */
 .toolbar .field.toolbar-partition-field {
   flex: 0 0 auto;
-  width: 3.6rem;
-  max-width: 3.6rem;
+  width: 4.5rem;
+  max-width: 4.5rem;
   min-width: 0;
   margin: 0;
 }
@@ -1914,12 +2225,16 @@ body.conn-reordering * {
 .toolbar .field.toolbar-partition-field select {
   width: 100%;
   box-sizing: border-box;
+  height: 2rem;
+  min-height: 2rem;
+  max-height: 2rem;
+  padding: 0 0.95rem 0 0.35rem;
   font-family: var(--mono);
   font-size: 0.78rem;
+  line-height: 1.2;
   text-align: center;
   text-align-last: center;
-  padding-left: 0.2rem;
-  padding-right: 0.95rem;
+  background: var(--input-bg);
 }
 
 .toolbar-seek-from {
@@ -2428,7 +2743,7 @@ body.groups-resizing * {
 
 .schemas-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 1rem;
   min-height: 0;
   flex: 1;
@@ -2436,11 +2751,70 @@ body.groups-resizing * {
 }
 
 .schemas-list {
+  position: relative;
+  width: 320px;
+  min-width: 200px;
+  max-width: 640px;
   border-right: 1px solid var(--border);
   padding-right: 0.75rem;
   overflow: auto;
   min-height: 0;
   height: 100%;
+  box-sizing: border-box;
+}
+
+.schemas-filter {
+  margin: 0 0 0.35rem;
+}
+
+.schemas-filter-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.schemas-filter-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.schemas-filter-row .refresh-icon-btn {
+  width: 2.15rem;
+  min-width: 2.15rem;
+  height: auto;
+  align-self: stretch;
+  box-sizing: border-box;
+}
+
+.schemas-filter-row .refresh-icon-btn svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.schemas-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 2;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.schemas-resize:hover,
+.schemas-list.is-resizing .schemas-resize {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+body.schemas-resizing,
+body.schemas-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .schemas-list .topic-item {
@@ -2815,6 +3189,17 @@ body.groups-resizing * {
   overflow: auto;
 }
 
+/* Dock is outside `.msg` — must bind to slider; slightly smaller than cards. */
+.msg-dock .msg-body,
+.msg-dock-json {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: max(10px, calc(var(--msg-font-size) - 2px));
+  line-height: 1.4;
+}
+
 .msg-dock-meta {
   display: flex;
   flex-wrap: wrap;
@@ -2844,7 +3229,6 @@ body.groups-resizing * {
 }
 
 .msg-dock-json {
-  margin: 0;
   max-height: none;
 }
 
@@ -3201,6 +3585,10 @@ body.topics-resizing * {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
   padding: 0.35rem 0.55rem 0.45rem;
+}
+
+.topic-schema-none-hint {
+  margin: 0.55rem 0 0.85rem;
 }
 
 .topic-schema-panel > summary {
@@ -3873,6 +4261,55 @@ body.topics-resizing * {
   font-weight: 400;
 }
 
+.messages-tail-panel {
+  margin-bottom: 0.9rem;
+}
+
+.tail-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.tail-transport-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  padding: 0;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  flex: none;
+}
+
+.tail-transport-btn.starting {
+  background: var(--accent);
+  color: #0b0d12;
+  border-color: color-mix(in srgb, var(--accent) 70%, #000);
+}
+
+.tail-transport-btn.starting:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.tail-transport-btn.stopping {
+  background: color-mix(in srgb, var(--danger) 16%, var(--bg));
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.tail-transport-btn.stopping:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 24%, var(--bg));
+}
+
+.tail-transport-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .messages-panel-controls {
   display: inline-flex;
   align-items: center;
@@ -4019,21 +4456,6 @@ body.topics-resizing * {
   text-align: right;
 }
 
-.message-group-opt {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.75rem;
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-.message-group-opt input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
 .batch-sort-btn {
   display: inline-flex;
   align-items: center;
@@ -4051,6 +4473,24 @@ body.topics-resizing * {
 .batch-sort-btn:hover {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+
+.group-by-partitions-btn {
+  width: 2.65rem;
+  height: 2.65rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  flex: none;
+}
+
+.group-by-partitions-btn:hover {
+  color: var(--text);
+}
+
+.group-by-partitions-btn.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .message-view-toggle {
@@ -4080,6 +4520,83 @@ body.topics-resizing * {
 .message-view-toggle button.active {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--text);
+}
+
+.batch-export-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.batch-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.85rem;
+  padding: 0 0.55rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.batch-export-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.batch-export-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.batch-export-menu.open .batch-export-btn {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.batch-export-popover {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 60;
+  min-width: 7.5rem;
+  padding: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* Opaque — glass --panel is translucent */
+  background: #12151c;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme='light'] .batch-export-popover {
+  background: #ffffff;
+}
+
+.batch-export-item {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.batch-export-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.batch-export-item:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .msg-head {
@@ -4305,11 +4822,21 @@ body.topics-resizing * {
 }
 
 .msg-body-wrap.is-collapsed .msg-body {
-  opacity: 0.9;
+  color: var(--muted);
+  opacity: 1;
   /* ~2 lines of mono body */
   max-height: 2.6rem;
   overflow: hidden;
   mask-image: linear-gradient(to bottom, #000 40%, transparent);
+}
+
+.msg-body-wrap.is-collapsed .msg-body .jh-key,
+.msg-body-wrap.is-collapsed .msg-body .jh-str,
+.msg-body-wrap.is-collapsed .msg-body .jh-num,
+.msg-body-wrap.is-collapsed .msg-body .jh-bool,
+.msg-body-wrap.is-collapsed .msg-body .jh-null,
+.msg-body-wrap.is-collapsed .msg-body .search-hit {
+  color: inherit;
 }
 
 .msg-body {

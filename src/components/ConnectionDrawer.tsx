@@ -30,6 +30,13 @@ import {
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
+/** Name / host / user / password / SR URL — keep localStorage + IPC lean. */
+const CONN_FIELD_MAX = 255
+
+function clampConnField(v: string, max = CONN_FIELD_MAX): string {
+  return v.length <= max ? v : v.slice(0, max)
+}
+
 function tlsPemNonEmpty(t: TlsPemConfig): boolean {
   return Boolean(
     t.caPath?.trim() ||
@@ -136,21 +143,28 @@ export default function ConnectionDrawer({
   const hasSrAuth = Boolean(
     config.schemaRegistryAuth?.username?.trim() || config.schemaRegistryAuth?.password,
   )
-  /**
-   * Kafka TLS UI: prefer kafkaTls; fall back to legacy shared schemaRegistryTls
-   * only when kafkaTls is unset (old saves stored PEMs there).
-   */
-  const kafkaTls: TlsPemConfig = config.kafkaTls ?? config.schemaRegistryTls ?? {}
   /** Opt-in: only when explicitly true. */
   const srReuseKafkaTls = config.schemaRegistryReuseKafkaTls === true
+  /** Dedicated SR PEMs (patchSrTls sets reuse=false). Legacy shared PEMs stay in Kafka fold. */
+  const srTlsDedicated = config.schemaRegistryReuseKafkaTls === false
   /**
-   * SR-own PEMs: hide legacy-shared / accidental Kafka copies so SR fold
-   * does not look "filled" when the user only configured Kafka TLS.
+   * Kafka TLS UI: prefer kafkaTls; fall back to legacy shared schemaRegistryTls
+   * only when kafkaTls is unset and SR is not using its own dedicated PEMs.
+   */
+  const kafkaTls: TlsPemConfig =
+    config.kafkaTls ?? (srTlsDedicated ? {} : (config.schemaRegistryTls ?? {}))
+  /**
+   * SR-own PEMs: show dedicated SR paths; hide legacy-shared / Kafka copies so the
+   * SR fold does not look "filled" when the user only configured Kafka TLS.
    */
   const srTlsOwn: TlsPemConfig = (() => {
     const sr = config.schemaRegistryTls
     if (!sr || !tlsPemNonEmpty(sr)) return {}
-    if (!config.kafkaTls) return {} // legacy shared → Kafka fold owns it
+    if (!config.kafkaTls) {
+      // Explicit SR PEMs (Browse in SR fold) — always show.
+      if (srTlsDedicated) return sr
+      return {} // legacy shared → Kafka fold owns it
+    }
     if (tlsPemSame(sr, config.kafkaTls)) return {} // duplicate of Kafka
     return sr
   })()
@@ -161,10 +175,12 @@ export default function ConnectionDrawer({
   const [srTlsOpen, setSrTlsOpen] = useState(false)
 
   // One-shot: migrate legacy shared / seeded duplicate PEMs into kafkaTls only.
+  // Skip when SR PEMs are dedicated (reuse explicitly false).
   useEffect(() => {
     if (
       !config.kafkaTls &&
       config.ssl &&
+      config.schemaRegistryReuseKafkaTls !== false &&
       config.schemaRegistryTls &&
       tlsPemNonEmpty(config.schemaRegistryTls)
     ) {
@@ -193,11 +209,15 @@ export default function ConnectionDrawer({
   const canConnect = nameOk && brokersOk && saslUserOk && saslPassOk
 
   function patchKafkaTls(patch: Partial<TlsPemConfig>) {
-    const base = config.kafkaTls ?? config.schemaRegistryTls ?? {}
+    const legacyShared =
+      !config.kafkaTls &&
+      config.schemaRegistryTls &&
+      config.schemaRegistryReuseKafkaTls !== false
+    const base = config.kafkaTls ?? (legacyShared ? config.schemaRegistryTls! : {})
     onUpdateConfig({
       kafkaTls: { ...base, ...patch },
-      // Leave SR PEMs alone unless we were still on the legacy shared field
-      ...(!config.kafkaTls && config.schemaRegistryTls ? { schemaRegistryTls: undefined } : {}),
+      // Leave dedicated SR PEMs alone; clear only legacy shared field
+      ...(legacyShared ? { schemaRegistryTls: undefined } : {}),
     })
   }
 
@@ -476,7 +496,8 @@ export default function ConnectionDrawer({
               {reqLabel(tr('name'), nameOk)}
               <input
                 value={config.name}
-                onChange={(e) => onUpdateConfig({ name: e.target.value })}
+                maxLength={CONN_FIELD_MAX}
+                onChange={(e) => onUpdateConfig({ name: clampConnField(e.target.value) })}
                 aria-required
                 autoCapitalize="none"
                 autoCorrect="off"
@@ -508,7 +529,8 @@ export default function ConnectionDrawer({
               {reqLabel(tr('brokerHost'), hostOk)}
               <input
                 value={brokerHost}
-                onChange={(e) => setBrokerHost(e.target.value)}
+                maxLength={CONN_FIELD_MAX}
+                onChange={(e) => setBrokerHost(clampConnField(e.target.value))}
                 placeholder={tr('brokerHostPh')}
                 aria-required
                 title={tr('brokerHostsHint')}
@@ -571,11 +593,12 @@ export default function ConnectionDrawer({
                 {reqLabel(tr('username'), saslUserOk)}
                 <input
                   value={config.sasl?.username || ''}
+                  maxLength={CONN_FIELD_MAX}
                   onChange={(e) =>
                     onUpdateConfig({
                       sasl: {
                         mechanism: config.sasl?.mechanism || 'plain',
-                        username: e.target.value,
+                        username: clampConnField(e.target.value),
                         password: config.sasl?.password || '',
                       },
                     })
@@ -588,12 +611,13 @@ export default function ConnectionDrawer({
                 {reqLabel(tr('password'), saslPassOk)}
                 <PasswordInput
                   value={config.sasl?.password || ''}
+                  maxLength={CONN_FIELD_MAX}
                   onChange={(password) =>
                     onUpdateConfig({
                       sasl: {
                         mechanism: config.sasl?.mechanism || 'plain',
                         username: config.sasl?.username || '',
-                        password,
+                        password: clampConnField(password),
                       },
                     })
                   }
@@ -720,17 +744,21 @@ export default function ConnectionDrawer({
                   <label>{tr('srUrl')}</label>
                   <input
                     value={config.schemaRegistryUrl || ''}
-                    onChange={(e) => onUpdateConfig({ schemaRegistryUrl: e.target.value })}
+                    maxLength={CONN_FIELD_MAX}
+                    onChange={(e) =>
+                      onUpdateConfig({ schemaRegistryUrl: clampConnField(e.target.value) })
+                    }
                   />
                 </div>
                 <div className="field">
                   <label>{tr('srUser')}</label>
                   <input
                     value={config.schemaRegistryAuth?.username || ''}
+                    maxLength={CONN_FIELD_MAX}
                     onChange={(e) =>
                       onUpdateConfig({
                         schemaRegistryAuth: {
-                          username: e.target.value,
+                          username: clampConnField(e.target.value),
                           password: config.schemaRegistryAuth?.password || '',
                         },
                       })
@@ -741,11 +769,12 @@ export default function ConnectionDrawer({
                   <label>{tr('srPass')}</label>
                   <PasswordInput
                     value={config.schemaRegistryAuth?.password || ''}
+                    maxLength={CONN_FIELD_MAX}
                     onChange={(password) =>
                       onUpdateConfig({
                         schemaRegistryAuth: {
                           username: config.schemaRegistryAuth?.username || '',
-                          password,
+                          password: clampConnField(password),
                         },
                       })
                     }

@@ -30,7 +30,9 @@ impl KafkaSession {
         );
         cfg.set("enable.auto.commit", "false");
         cfg.set("auto.offset.reset", "latest");
-        let consumer: SConsumer = cfg.create().map_err(|e| e.to_string())?;
+        let consumer: SConsumer = cfg
+            .create_with_context(super::consume_ctx::KafdeskCtx::default())
+            .map_err(|e| e.to_string())?;
         consumer
             .subscribe(&[&request.topic])
             .map_err(|e| e.to_string())?;

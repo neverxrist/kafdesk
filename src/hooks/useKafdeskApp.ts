@@ -40,7 +40,13 @@ import {
   rowsFromHeaders,
   type ProduceHeaderRow,
 } from '../lib/produceHeaders'
-import { guessAvroSubject, messageBodyText, messageId, slimMessageForUi } from '../lib/messageText'
+import {
+  guessAvroSubject,
+  messageBodyText,
+  messageId,
+  slimMessageForUi,
+  topicSubjectCandidates,
+} from '../lib/messageText'
 import { filterMessages } from '../lib/messageFilter'
 import { wireSearch } from '../lib/searchScope'
 import { stripIpcError } from '../lib/ipcError'
@@ -100,6 +106,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     search,
     searchKey,
     searchScope,
+    search2,
+    searchScope2,
+    dualSearch,
+    searchHitsOn,
+    searchClauses,
     headerKey,
     headerValue,
     timeFrom,
@@ -118,6 +129,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     selectedPartitions,
     setSearchFilter,
     setSearchScopeFilter,
+    setSearch2Filter,
+    setSearchScope2Filter,
+    openDualSearch,
+    closeDualSearch,
+    setSearchHitsOnSlot,
     setHeaderKeyFilter,
     setHeaderValueFilter,
     setTimeFromFilter,
@@ -149,6 +165,23 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [localSchema, setLocalSchema] = useState<string | null>(null)
   const [localSchemaName, setLocalSchemaName] = useState<string | null>(null)
   const [produceResult, setProduceResult] = useState<string | null>(null)
+  /** Per-topic produce drafts while staying on Produce; cleared when leaving the tab. */
+  type ProduceDraft = {
+    format: 'avro' | 'avro-local' | 'json' | 'string'
+    key: string
+    value: string
+    headerRows: ProduceHeaderRow[]
+    partition: number | null
+    subject: string
+    localSchema: string | null
+    localSchemaName: string | null
+  }
+  const produceDraftsRef = useRef<Map<string, ProduceDraft>>(new Map())
+  /** After restoring a draft that already has a Subject — don't auto-clobber it. */
+  const skipAutoApplyTopicRef = useRef<string | null>(null)
+  const subjectLoadGenRef = useRef(0)
+  const subjectRef = useRef(subject)
+  subjectRef.current = subject
   const [produceTemplates, setProduceTemplates] = useState<ProduceTemplate[]>(() =>
     loadProduceTemplates(),
   )
@@ -918,14 +951,102 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     if (merged.size > 0) flush()
   }
 
+  function snapshotProduceDraft(): ProduceDraft {
+    return {
+      format: produceFormat,
+      key: produceKey,
+      value: produceValue,
+      headerRows: produceHeaderRows,
+      partition: producePartition,
+      subject,
+      localSchema,
+      localSchemaName,
+    }
+  }
+
+  function clearProduceEditor() {
+    subjectLoadGenRef.current += 1
+    skipAutoApplyTopicRef.current = null
+    setProduceFormat('json')
+    setProduceKey('')
+    setProduceValue('')
+    setProduceHeaderRows([])
+    setProducePartition(null)
+    setSubject('')
+    setSchemaInfo(null)
+    setLocalSchema(null)
+    setLocalSchemaName(null)
+    setProduceResult(null)
+    subjectRef.current = ''
+  }
+
+  function restoreProduceDraft(topic: string, draft: ProduceDraft) {
+    subjectLoadGenRef.current += 1
+    setProduceFormat(draft.format)
+    setProduceKey(draft.key)
+    setProduceValue(draft.value)
+    setProduceHeaderRows(draft.headerRows)
+    setProducePartition(draft.partition)
+    setLocalSchema(draft.localSchema)
+    setLocalSchemaName(draft.localSchemaName)
+    setProduceResult(null)
+    setSchemaInfo(null)
+    subjectRef.current = draft.subject
+    // Keep draft Subject as-is; only skip auto-apply when one was saved.
+    skipAutoApplyTopicRef.current = draft.subject.trim() ? topic : null
+    if (draft.subject) {
+      void onSubjectChange(draft.subject)
+    } else {
+      setSubject('')
+    }
+  }
+
+  function subjectBelongsToTopic(subjectName: string, topic: string | null): boolean {
+    if (!topic || !subjectName) return false
+    if (topicSubjectCandidates(topic).includes(subjectName)) return true
+    return (
+      subjectName === topic ||
+      subjectName.startsWith(`${topic}-`) ||
+      subjectName.startsWith(`${topic}.`) ||
+      subjectName.includes(topic)
+    )
+  }
+
+  /**
+   * Topic schema probe → fill Subject for this topic.
+   * Replaces empty or foreign subjects left over from another topic; leaves draft subjects alone.
+   */
+  function autoApplyTopicSubject(subjectName: string) {
+    const topic = selectedTopicRef.current
+    if (topic && skipAutoApplyTopicRef.current === topic) return
+    const cur = subjectRef.current.trim()
+    if (cur && subjectBelongsToTopic(cur, topic)) return
+    setProduceFormat('avro')
+    void onSubjectChange(subjectName)
+  }
+
   async function selectTopic(name: string) {
     // Pause enrich; cancel in-flight consume. Only auto-read on Consume tab —
     // Produce-only ACL connections must not hit GroupAuthorizationFailed on click.
+    const prevTopic = selectedTopicRef.current
+    const onProduce = tabRef.current === 'produce'
+    if (onProduce && prevTopic && prevTopic !== name) {
+      produceDraftsRef.current.set(prevTopic, snapshotProduceDraft())
+    }
+
     enrichGenRef.current += 1
     consumeGenRef.current += 1
     setSelectedTopic(name)
-    setProducePartition(null)
     selectedTopicRef.current = name
+
+    if (onProduce) {
+      const draft = produceDraftsRef.current.get(name)
+      if (draft) restoreProduceDraft(name, draft)
+      else clearProduceEditor()
+    } else {
+      setProducePartition(null)
+    }
+
     setMessages([])
     setTailMessages([])
     setDiffMessages([])
@@ -1002,6 +1123,10 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setMessages([])
       clearDiff()
     }
+    if (prev === 'produce' && next !== 'produce') {
+      produceDraftsRef.current.clear()
+      clearProduceEditor()
+    }
     if (prev === 'tail' && next !== 'tail') {
       setTailMessages([])
       if (tailing) {
@@ -1037,12 +1162,24 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   function saveCurrentQuery(name: string) {
     const trimmed = name.trim()
     if (!trimmed) return
+    // Persist only the first search clause — dual filter is session UI.
+    const f = currentFilterState()
     const q: SavedConsumeQuery = {
       id: crypto.randomUUID(),
       name: trimmed,
       createdAt: Date.now(),
       topic: selectedTopic,
-      ...currentFilterState(),
+      search: f.search,
+      searchKey: f.searchKey,
+      searchScope: f.searchScope,
+      headerKey: f.headerKey,
+      headerValue: f.headerValue,
+      partitionFilter: f.partitionFilter,
+      startFrom: f.startFrom,
+      startOffset: f.startOffset,
+      limit: f.limit,
+      timeFrom: f.timeFrom,
+      timeTo: f.timeTo,
     }
     const next = [q, ...savedQueries.filter((x) => x.name.toLowerCase() !== trimmed.toLowerCase())]
     setSavedQueries(next)
@@ -1057,6 +1194,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       search: q.search,
       searchKey: q.searchKey,
       searchScope: q.searchScope ?? 'both',
+      search2: '',
+      searchScope2: 'value',
+      dualSearch: false,
       headerKey: q.headerKey,
       headerValue: q.headerValue,
       partitionFilter: q.partitionFilter,
@@ -1374,13 +1514,17 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function onSubjectChange(next: string) {
+    const gen = ++subjectLoadGenRef.current
     setSubject(next)
+    subjectRef.current = next
     setSchemaInfo(null)
     if (!next || !hasRegistry) return
     try {
       const info = await window.kafdesk.getLatestSchema(next)
+      if (subjectLoadGenRef.current !== gen) return
       setSchemaInfo(info)
     } catch (err) {
+      if (subjectLoadGenRef.current !== gen) return
       setError(err instanceof Error ? err.message : String(err))
     }
   }
@@ -1549,6 +1693,16 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setSearch: setSearchFilter,
     searchScope,
     setSearchScope: setSearchScopeFilter,
+    search2,
+    setSearch2: setSearch2Filter,
+    searchScope2,
+    setSearchScope2: setSearchScope2Filter,
+    dualSearch,
+    openDualSearch,
+    closeDualSearch,
+    searchHitsOn,
+    setSearchHitsOnSlot,
+    searchClauses,
     headerKey,
     setHeaderKey: setHeaderKeyFilter,
     headerValue,
@@ -1575,6 +1729,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       search,
       searchKey,
       searchScope,
+      search2,
+      searchScope2,
+      dualSearch,
       headerKey,
       headerValue,
     }),
@@ -1649,6 +1806,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     startTail,
     stopTail,
     onSubjectChange,
+    autoApplyTopicSubject,
     sendMessage,
     sendBulk,
     generateFromSchema,

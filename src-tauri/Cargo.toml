@@ -1,6 +1,6 @@
 [package]
 name = "kafdesk"
-version = "1.0.3"
+version = "1.0.4"
 description = "KafDesk — lightweight Kafka desktop client (Tauri)"
 authors = ["KafDesk contributors"]
 license = "MIT"

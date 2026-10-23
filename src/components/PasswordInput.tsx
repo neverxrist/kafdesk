@@ -6,12 +6,14 @@ export default function PasswordInput({
   autoComplete,
   showLabel,
   hideLabel,
+  maxLength,
 }: {
   value: string
   onChange: (value: string) => void
   autoComplete?: string
   showLabel: string
   hideLabel: string
+  maxLength?: number
 }) {
   const [visible, setVisible] = useState(false)
 
@@ -25,7 +27,21 @@ export default function PasswordInput({
         type="text"
         className={visible ? undefined : 'is-masked'}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        maxLength={maxLength}
+        onChange={(e) => {
+          const next = e.target.value
+          onChange(maxLength != null ? next.slice(0, maxLength) : next)
+        }}
+        onCopy={(e) => {
+          // WKWebView + -webkit-text-security can put garbage/URLs on the clipboard.
+          e.preventDefault()
+          e.clipboardData.setData('text/plain', value)
+        }}
+        onCut={(e) => {
+          e.preventDefault()
+          e.clipboardData.setData('text/plain', value)
+          onChange('')
+        }}
         autoComplete={autoComplete}
         spellCheck={false}
         autoCapitalize="none"
@@ -35,6 +51,8 @@ export default function PasswordInput({
       <button
         type="button"
         className="password-toggle"
+        tabIndex={-1}
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => setVisible((v) => !v)}
         aria-label={visible ? hideLabel : showLabel}
         title={visible ? hideLabel : showLabel}

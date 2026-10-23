@@ -9,14 +9,6 @@ import TopicSchemaPanel from '../TopicSchemaPanel'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
-function prettySchema(schema: string): string {
-  try {
-    return JSON.stringify(JSON.parse(schema), null, 2)
-  } catch {
-    return schema
-  }
-}
-
 function ClearValueIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
@@ -38,6 +30,7 @@ export default function ProducePanel({
   subjects,
   subject,
   onSubjectChange,
+  onAutoApplyTopicSubject,
   hasRegistry,
   schemaInfo,
   localSchemaName,
@@ -70,6 +63,8 @@ export default function ProducePanel({
   subjects: string[]
   subject: string
   onSubjectChange: (next: string) => void
+  /** Auto-fill Subject after probe; no-ops when a draft already has a subject. */
+  onAutoApplyTopicSubject: (subject: string) => void
   hasRegistry: boolean
   schemaInfo: SchemaSubjectInfo | null
   localSchemaName: string | null
@@ -223,10 +218,15 @@ export default function ProducePanel({
 
         {selectedTopic && (
           <TopicSchemaPanel
+            key={selectedTopic}
             tr={tr}
             topic={selectedTopic}
             subjects={subjects}
             hasRegistry={hasRegistry}
+            defaultOpen={false}
+            autoApplySubject
+            showNoneHint={produceFormat === 'avro'}
+            onAutoApplySubject={onAutoApplyTopicSubject}
             onUseSubject={(s) => {
               setProduceFormat('avro')
               onSubjectChange(s)
@@ -249,7 +249,11 @@ export default function ProducePanel({
           </select>
         </div>
 
-        <div className={`produce-type-hint ${produceFormat === 'avro-local' ? 'avro' : produceFormat}`}>
+        <div
+          className={`produce-type-hint ${
+            produceFormat === 'avro-local' ? 'avro-local is-warn' : produceFormat
+          }`}
+        >
           {produceFormat === 'avro' && (
             <>
               <span className="badge avro">AVRO · SR</span>
@@ -258,7 +262,7 @@ export default function ProducePanel({
           )}
           {produceFormat === 'avro-local' && (
             <>
-              <span className="badge avro">AVRO · LOCAL</span>
+              <span className="badge warn">AVRO · LOCAL · beta</span>
               <span>{tr('produceAvroLocalHint')}</span>
             </>
           )}
@@ -301,21 +305,10 @@ export default function ProducePanel({
               <button type="button" disabled={busy} onClick={onLoadAvsc}>
                 {tr('browse')}
               </button>
-              <span className="status">
-                {localSchemaName
-                  ? tr('localSchemaLoaded', { name: localSchemaName })
-                  : tr('localSchemaNeeded')}
-              </span>
+              {localSchemaName && (
+                <span className="status">{tr('localSchemaLoaded', { name: localSchemaName })}</span>
+              )}
             </div>
-          </div>
-        )}
-        {schemaInfo && produceFormat === 'avro' && (
-          <div className="field">
-            <label>
-              {tr('activeSchema', { version: schemaInfo.version, id: schemaInfo.id })}
-              {schemaInfo.schemaType ? ` · ${schemaInfo.schemaType}` : ' · AVRO'}
-            </label>
-            <textarea className="schema-preview" readOnly value={prettySchema(schemaInfo.schema)} />
           </div>
         )}
         <div className="produce-key-part-row">

@@ -25,8 +25,11 @@ export default function TopicSchemaPanel({
   subjects,
   hasRegistry,
   onUseSubject,
+  onAutoApplySubject,
   onOpenInSchemas,
   defaultOpen,
+  autoApplySubject = false,
+  showNoneHint = true,
 }: {
   tr: Tr
   topic: string | null
@@ -34,10 +37,19 @@ export default function TopicSchemaPanel({
   hasRegistry: boolean
   /** Produce: set subject (+ usually switch to Avro SR). */
   onUseSubject?: (subject: string) => void
+  /**
+   * Produce auto-fill after probe. Prefer over onUseSubject so restored drafts
+   * are not overwritten (caller can no-op when Subject is already set).
+   */
+  onAutoApplySubject?: (subject: string) => void
   /** Consume popover: jump to Schemas tab with this subject selected. */
   onOpenInSchemas?: (subject: string) => void
-  /** When false, start collapsed. When omitted, open once subjects are found (produce). */
+  /** When false, stay collapsed. When true/omitted with matches — open (consume popover). */
   defaultOpen?: boolean
+  /** Produce: once per topic, push best match into Subject (and usually Avro SR). */
+  autoApplySubject?: boolean
+  /** Warn plaque when probe finds no topic subject (Produce: only for Avro SR). */
+  showNoneHint?: boolean
 }) {
   const fromList = useMemo(
     () => (topic ? subjectsForTopic(topic, subjects) : []),
@@ -52,6 +64,7 @@ export default function TopicSchemaPanel({
   const [err, setErr] = useState<string | null>(null)
   const probeGen = useRef(0)
   const loadGen = useRef(0)
+  const autoAppliedTopic = useRef<string | null>(null)
 
   const matched = useMemo(() => {
     const seen = new Set<string>()
@@ -66,6 +79,7 @@ export default function TopicSchemaPanel({
 
   // Probe TopicNameStrategy names even when /subjects omits them.
   useEffect(() => {
+    autoAppliedTopic.current = null
     if (!topic || !hasRegistry) {
       setProbed([])
       setProbeDone(true)
@@ -104,6 +118,23 @@ export default function TopicSchemaPanel({
     setPicked((prev) => (prev && matched.includes(prev) ? prev : matched[0]))
   }, [matched])
 
+  // Produce: fill Subject with best topic schema once discovery finishes (don't re-force).
+  useEffect(() => {
+    const apply = onAutoApplySubject ?? onUseSubject
+    if (!autoApplySubject || !apply || !topic || !probeDone || !matched.length) return
+    if (autoAppliedTopic.current === topic) return
+    // Prefer names for THIS topic — never pick a leftover -value from a prior probe.
+    const preferred =
+      matched.find((s) => s === `${topic}-value`) ||
+      matched.find((s) => s === topic) ||
+      matched.find((s) => s === `${topic}-key`) ||
+      matched.find((s) => s.startsWith(`${topic}-`) && s.endsWith('-value')) ||
+      matched.find((s) => s.startsWith(`${topic}-`) || s.startsWith(`${topic}.`)) ||
+      matched[0]
+    autoAppliedTopic.current = topic
+    apply(preferred)
+  }, [autoApplySubject, onAutoApplySubject, onUseSubject, topic, probeDone, matched])
+
   useEffect(() => {
     if (!picked || !hasRegistry) {
       setInfo(null)
@@ -130,9 +161,9 @@ export default function TopicSchemaPanel({
       })
   }, [picked, hasRegistry])
 
-  // Consume: start collapsed. Produce: open when subjects exist (uncontrolled otherwise).
+  // Produce passes defaultOpen={false} (collapsed). Consume popover opens when matches exist.
   const openAttr =
-    defaultOpen === false ? undefined : matched.length > 0 ? true : undefined
+    defaultOpen === false ? undefined : matched.length > 0 || defaultOpen === true ? true : undefined
 
   if (!topic) return null
   if (!hasRegistry) {
@@ -147,11 +178,12 @@ export default function TopicSchemaPanel({
   const discovering = !probeDone && matched.length === 0
 
   if (probeDone && matched.length === 0) {
+    if (!showNoneHint) return null
     return (
-      <details className="topic-schema-panel" open={openAttr}>
-        <summary>{tr('topicSchema')}</summary>
-        <p className="field-hint">{tr('topicSchemaNone')}</p>
-      </details>
+      <div className="produce-type-hint is-warn topic-schema-none-hint">
+        <span className="badge warn">SR</span>
+        <span>{tr('topicSchemaNone')}</span>
+      </div>
     )
   }
 

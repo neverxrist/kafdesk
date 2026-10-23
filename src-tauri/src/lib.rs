@@ -21,10 +21,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(state)
         .setup(|app| {
+            debug_log::bind_app(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)
+                        // librdkafka / rdkafka go to Logs tab via KafdeskCtx — not stderr.
+                        .level_for("librdkafka", log::LevelFilter::Off)
+                        .level_for("rdkafka", log::LevelFilter::Off)
+                        .level_for("rdkafka::client", log::LevelFilter::Off)
                         .build(),
                 )?;
             }
@@ -56,6 +61,7 @@ pub fn run() {
             commands::kafka_tail_set_filter,
             commands::dialog_pick_pem_file,
             commands::dialog_pick_avsc_file,
+            commands::dialog_save_text_file,
             commands::auth_list_providers,
             commands::auth_session,
             commands::auth_login,

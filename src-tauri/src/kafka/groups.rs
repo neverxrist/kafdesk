@@ -38,7 +38,9 @@ impl KafkaSession {
         let mut cfg = self.base_config.clone();
         cfg.set("group.id", group_id);
         cfg.set("enable.auto.commit", "false");
-        let group_consumer: BConsumer = cfg.create().map_err(|e| e.to_string())?;
+        let group_consumer: BConsumer = cfg
+            .create_with_context(super::consume_ctx::KafdeskCtx::default())
+            .map_err(|e| e.to_string())?;
 
         let topic_names: Vec<String> = if let Some(t) = topic {
             vec![t.to_string()]
@@ -159,7 +161,9 @@ impl KafkaSession {
         let mut cfg = self.base_config.clone();
         cfg.set("group.id", &request.group_id);
         cfg.set("enable.auto.commit", "false");
-        let consumer: BConsumer = cfg.create().map_err(|e| e.to_string())?;
+        let consumer: BConsumer = cfg
+            .create_with_context(super::consume_ctx::KafdeskCtx::default())
+            .map_err(|e| e.to_string())?;
         let mut tpl = TopicPartitionList::new();
         for p in &request.partitions {
             let off: i64 = p.offset.parse().map_err(|_| "bad offset")?;

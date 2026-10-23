@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import type { KafkaMessageView } from '../types/kafdesk'
 import { formatBadgeLabel, formatMessageDateTime } from '../lib/format'
 import { highlightMessageBody } from '../lib/jsonHighlight'
-import type { SearchScope } from '../lib/searchScope'
+import { messageBodyTextFiltered } from '../lib/jsonSearchFilter'
+import { searchHighlightQueries, searchHitsNeedles, type SearchClause } from '../lib/searchScope'
 import { highlightSearchMatches } from '../lib/searchHighlight'
-import { messageBodyText, messageId } from '../lib/messageText'
+import { messageId } from '../lib/messageText'
 import MessageDiffPanel from './MessageDiffPanel'
 import type { useLocale } from '../hooks/useLocale'
 
@@ -45,8 +46,8 @@ export default function MessageInspectorDock({
   onSelect,
   onClose,
   onRepublish,
-  searchQuery = '',
-  searchScope = 'both',
+  searchClauses = [],
+  searchHitsOn = [false, false],
 }: {
   tr: Tr
   messages: KafkaMessageView[]
@@ -59,8 +60,9 @@ export default function MessageInspectorDock({
   onSelect: (id: string) => void
   onClose: () => void
   onRepublish?: (m: KafkaMessageView) => void
-  searchQuery?: string
-  searchScope?: SearchScope
+  searchClauses?: SearchClause[]
+  /** Per-row Hits toggles (same order as searchClauses). */
+  searchHitsOn?: [boolean, boolean]
 }) {
   const [height, setHeight] = useState(loadDockHeight)
   const [diffOnlyChanges, setDiffOnlyChanges] = useState(false)
@@ -73,13 +75,22 @@ export default function MessageInspectorDock({
     if (!diffReady) setDiffOnlyChanges(false)
   }, [diffReady])
 
-  const valueQuery = searchScope === 'key' ? '' : searchQuery
-  const keyQuery = searchScope === 'value' ? '' : searchQuery
+  const { keyQueries, valueQueries } = searchHighlightQueries(searchClauses)
+  const hitsQueries = useMemo(
+    () => searchHitsNeedles(searchClauses, searchHitsOn),
+    [searchClauses, searchHitsOn],
+  )
+  const matchesOnly = hitsQueries.length > 0
 
   const bodyHtml = useMemo(
     () =>
-      active && !diffReady ? highlightMessageBody(messageBodyText(active), valueQuery) : null,
-    [active, diffReady, valueQuery],
+      active && !diffReady
+        ? highlightMessageBody(
+            messageBodyTextFiltered(active, hitsQueries, matchesOnly),
+            valueQueries,
+          )
+        : null,
+    [active, diffReady, hitsQueries, valueQueries, matchesOnly],
   )
 
   useEffect(() => {
@@ -265,8 +276,8 @@ export default function MessageInspectorDock({
               <div className="msg-dock-key" title={String(active.key)}>
                 <em>{tr('msgKey')}</em>
                 <strong>
-                  {keyQuery.trim()
-                    ? highlightSearchMatches(String(active.key), keyQuery)
+                  {keyQueries.length
+                    ? highlightSearchMatches(String(active.key), keyQueries)
                     : String(active.key)}
                 </strong>
               </div>

@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { SchemaSubjectInfo } from '../../types/kafdesk'
 import type { useLocale } from '../../hooks/useLocale'
+import {
+  clampSchemasWidth,
+  loadSchemasWidth,
+  persistSchemasWidth,
+} from '../../lib/schemasLayout'
 import { RefreshIcon } from '../ConnActionIcons'
 
 type Tr = ReturnType<typeof useLocale>['tr']
@@ -40,9 +45,45 @@ export default function SchemasPanel({
   const [info, setInfo] = useState<SchemaSubjectInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [schemasWidth, setSchemasWidth] = useState(() => loadSchemasWidth())
+  const [resizing, setResizing] = useState(false)
+  const resizeStart = useRef<{ x: number; w: number } | null>(null)
   const loadGen = useRef(0)
   const clearFocusRef = useRef(onFocusSubjectConsumed)
   clearFocusRef.current = onFocusSubjectConsumed
+
+  useEffect(() => {
+    if (!resizing) return
+    function onMove(e: PointerEvent) {
+      const start = resizeStart.current
+      if (!start) return
+      setSchemasWidth(clampSchemasWidth(start.w + (e.clientX - start.x)))
+    }
+    function onUp() {
+      resizeStart.current = null
+      setResizing(false)
+      document.body.classList.remove('schemas-resizing')
+      setSchemasWidth((w) => {
+        persistSchemasWidth(w)
+        return w
+      })
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [resizing])
+
+  function onResizePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault()
+    resizeStart.current = { x: e.clientX, w: schemasWidth }
+    setResizing(true)
+    document.body.classList.add('schemas-resizing')
+  }
 
   useEffect(() => {
     if (!focusSubject) return
@@ -109,10 +150,21 @@ export default function SchemasPanel({
   return (
     <section className="messages schemas-pane">
       <div className="schemas-layout">
-        <div className="schemas-list drag-scroll">
-          <div className="filter-toolbar">
-            <div className="field">
-              <label>{tr('schemasCount', { n: filtered.length })}</label>
+        <div
+          className={`schemas-list drag-scroll${resizing ? ' is-resizing' : ''}`}
+          style={{ width: schemasWidth }}
+        >
+          <div
+            className="schemas-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-valuenow={schemasWidth}
+            title={tr('resizeSchemas')}
+            onPointerDown={onResizePointerDown}
+          />
+          <div className="field schemas-filter">
+            <label>{tr('schemasCount', { n: filtered.length })}</label>
+            <div className="schemas-filter-row">
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -124,17 +176,17 @@ export default function SchemasPanel({
                 spellCheck={false}
                 lang="en"
               />
+              <button
+                type="button"
+                className={`refresh-icon-btn${busy ? ' busy' : ''}`}
+                disabled={busy}
+                onClick={onRefreshSubjects}
+                title={tr('refresh')}
+                aria-label={tr('refresh')}
+              >
+                <RefreshIcon />
+              </button>
             </div>
-            <button
-              type="button"
-              className={`refresh-icon-btn${busy ? ' busy' : ''}`}
-              disabled={busy}
-              onClick={onRefreshSubjects}
-              title={tr('refresh')}
-              aria-label={tr('refresh')}
-            >
-              <RefreshIcon />
-            </button>
           </div>
           {filtered.length === 0 && (
             <div className="empty" style={{ padding: '0.75rem 0' }}>

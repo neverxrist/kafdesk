@@ -98,7 +98,7 @@ export function installDragScroll(): () => void {
     if (e.button !== 0) return
     if (!(e.target instanceof Element)) return
     if (e.target.closest(SKIP)) return
-    if (e.target.closest('.topics-resize, .groups-resize, .conn-drag-handle')) return
+    if (e.target.closest('.topics-resize, .groups-resize, .schemas-resize, .conn-drag-handle')) return
     if (document.body.classList.contains('conn-reordering')) return
     const scroll = nearestDragScrollPane(e.target)
     if (!scroll) return

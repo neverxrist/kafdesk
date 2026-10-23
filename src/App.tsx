@@ -174,6 +174,15 @@ export default function App() {
             setSearch={a.setSearch}
             searchScope={a.searchScope}
             setSearchScope={a.setSearchScope}
+            search2={a.search2}
+            setSearch2={a.setSearch2}
+            searchScope2={a.searchScope2}
+            setSearchScope2={a.setSearchScope2}
+            dualSearch={a.dualSearch}
+            onOpenDualSearch={a.openDualSearch}
+            onCloseDualSearch={a.closeDualSearch}
+            searchHitsOn={a.searchHitsOn}
+            onSearchHitsSlot={a.setSearchHitsOnSlot}
             headerKey={a.headerKey}
             setHeaderKey={a.setHeaderKey}
             headerValue={a.headerValue}
@@ -207,12 +216,17 @@ export default function App() {
             setSearch={a.setSearch}
             searchScope={a.searchScope}
             setSearchScope={a.setSearchScope}
+            search2={a.search2}
+            setSearch2={a.setSearch2}
+            searchScope2={a.searchScope2}
+            setSearchScope2={a.setSearchScope2}
+            dualSearch={a.dualSearch}
+            onOpenDualSearch={a.openDualSearch}
+            onCloseDualSearch={a.closeDualSearch}
+            searchHitsOn={a.searchHitsOn}
+            onSearchHitsSlot={a.setSearchHitsOnSlot}
             partitionFilter={a.partitionFilter}
             setPartitionFilter={a.setPartitionFilter}
-            tailing={a.tailing}
-            busy={a.busy}
-            onStartTail={a.startTail}
-            onStopTail={a.stopTail}
           />
         )}
 
@@ -268,8 +282,8 @@ export default function App() {
                 onToggleDiff={a.toggleDiffMessage}
                 onClearDiff={a.clearDiff}
                 onRepublish={a.republishMessage}
-                search={a.search}
-                searchScope={a.searchScope}
+                searchClauses={a.searchClauses}
+                searchHitsOn={a.searchHitsOn}
                 onOpenConsumerGroup={(groupId) => {
                   a.selectGroup(groupId)
                   a.setTab('groups')
@@ -285,6 +299,7 @@ export default function App() {
                 subjects={a.subjects}
                 subject={a.subject}
                 onSubjectChange={a.onSubjectChange}
+                onAutoApplyTopicSubject={a.autoApplyTopicSubject}
                 hasRegistry={a.hasRegistry}
                 schemaInfo={a.schemaInfo}
                 localSchemaName={a.localSchemaName}
@@ -315,11 +330,14 @@ export default function App() {
               <TailPanel
                 tr={tr}
                 tailing={a.tailing}
+                busy={a.busy}
                 tailMessages={a.tailMessages}
                 tailBufferCount={a.tailBufferCount}
                 selectedTopic={a.selectedTopic}
-                search={a.search}
-                searchScope={a.searchScope}
+                searchClauses={a.searchClauses}
+                searchHitsOn={a.searchHitsOn}
+                onStartTail={a.startTail}
+                onStopTail={a.stopTail}
               />
             )}
             {a.tab === 'groups' && (

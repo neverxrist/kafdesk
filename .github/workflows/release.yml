@@ -21,7 +21,7 @@ jobs:
             rust_target: aarch64-apple-darwin
             artifact_name: mac-arm64
             bundles: dmg,app
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             # Native host — omit --target so cmake/rdkafka-sys don't cross-compile
             rust_target: ''
             artifact_name: linux-x64
@@ -34,9 +34,9 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -183,7 +183,7 @@ jobs:
           ls -la release-out
           test -n "$(ls -A release-out 2>/dev/null)" || { echo "No artifacts collected"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: release-out/*
@@ -193,7 +193,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -203,7 +203,7 @@ jobs:
           find artifacts -type f -exec cp -f {} release-files/ \;
           ls -la release-files
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: release-files/*
           generate_release_notes: true
@@ -211,6 +211,11 @@ jobs:
             ## KafDesk ${{ github.ref_name }}
 
             Tauri 2 desktop client (Electron removed).
+
+            ### Highlights
+            - Dual AND search (max 2) + **Hits** (Value-only JSON field trim)
+            - Batch export of the visible filtered window (JSON / CSV)
+            - Live Tail play/stop in panel; Consume group-by-partitions
 
             ### Downloads
             - **macOS Apple Silicon** — `*-mac-arm64.dmg`
