@@ -5,7 +5,7 @@ use crate::domain::{
 };
 use crate::types::*;
 use super::consume_ctx::ConsumeCtx;
-use super::decode::headers_from_message;
+use super::decode::{cap_message_value, headers_from_message};
 use super::session::KafkaSession;
 use rdkafka::config::{ClientConfig, FromClientConfigAndContext};
 use rdkafka::consumer::{BaseConsumer, Consumer};
@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 impl KafkaSession {
-    fn consume_group_id(&self) -> String {
+    /// Stable per-user id: librdkafka's assign() requires `group.id` (else `Unknown group`).
+    /// Nothing is committed and no JoinGroup is sent, so no group appears on the cluster.
+    pub(super) fn consume_group_id(&self) -> String {
         self.config
             .as_ref()
             .and_then(|c| c.sasl.as_ref())
@@ -28,22 +30,76 @@ impl KafkaSession {
     }
 
     /// Shared librdkafka knobs for assign()-only browse (no commit / minimal coordinator).
-    fn consume_client_config(&self) -> (ClientConfig, String) {
-        let group_id = self.consume_group_id();
+    fn consume_client_config(&self) -> ClientConfig {
         let mut cfg = self.base_config.clone();
-        cfg.set("group.id", &group_id);
+        cfg.set("group.id", self.consume_group_id());
+        cfg.set("session.timeout.ms", "6000");
+        cfg.set("coordinator.query.interval.ms", "600000");
         cfg.set("enable.auto.commit", "false");
         cfg.set("enable.auto.offset.store", "false");
         cfg.set("auto.offset.reset", "earliest");
         cfg.set("enable.partition.eof", "true");
         cfg.set("socket.timeout.ms", "5000");
         cfg.set("socket.connection.setup.timeout.ms", "5000");
-        cfg.set("session.timeout.ms", "6000");
         cfg.set("reconnect.backoff.ms", "100");
         cfg.set("reconnect.backoff.max.ms", "1000");
         cfg.set("metadata.request.timeout.ms", "5000");
-        cfg.set("coordinator.query.interval.ms", "600000");
-        (cfg, group_id)
+        cfg
+    }
+
+    /// One message with its full (uncapped) value — "load full" for truncated rows.
+    pub async fn fetch_message(
+        &self,
+        topic: &str,
+        partition: i32,
+        offset: i64,
+    ) -> Result<KafkaMessageView, String> {
+        self.ensure_config()?;
+        let cfg = self.consume_client_config();
+        let ctx = ConsumeCtx::default();
+        let err_slot = ctx.clone();
+        let consumer: BaseConsumer<ConsumeCtx> =
+            BaseConsumer::from_config_and_context(&cfg, ctx).map_err(|e| e.to_string())?;
+        let mut tpl = TopicPartitionList::new();
+        tpl.add_partition_offset(topic, partition, Offset::Offset(offset))
+            .map_err(|e| e.to_string())?;
+        consumer.assign(&tpl).map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            match consumer.poll(Duration::from_millis(200)) {
+                None => {
+                    if let Some(err) = err_slot.peek_error() {
+                        return Err(err);
+                    }
+                }
+                Some(Err(e)) => {
+                    let msg = e.to_string();
+                    if msg.to_lowercase().contains("partition eof") {
+                        return Err(format!("Offset {offset} is past the end of {topic}/{partition}"));
+                    }
+                    return Err(msg);
+                }
+                Some(Ok(msg)) => {
+                    if msg.offset() < offset {
+                        continue;
+                    }
+                    if msg.offset() != offset {
+                        return Err(format!(
+                            "Offset {offset} is no longer in {topic}/{partition} (compacted or deleted)"
+                        ));
+                    }
+                    let ts = match msg.timestamp() {
+                        rdkafka::Timestamp::CreateTime(ms) | rdkafka::Timestamp::LogAppendTime(ms) => ms,
+                        _ => 0,
+                    };
+                    let headers = headers_from_message(&msg);
+                    return Ok(self
+                        .decode_message_view(topic, partition, offset, ts, msg.key(), msg.payload(), headers)
+                        .await);
+                }
+            }
+        }
+        Err(format!("Timed out reading {topic}/{partition}@{offset}"))
     }
 
     pub async fn consume_cancellable(
@@ -150,7 +206,7 @@ impl KafkaSession {
             return Ok(vec![]);
         }
 
-        let (cfg, group_id) = self.consume_client_config();
+        let cfg = self.consume_client_config();
         let ctx = ConsumeCtx::default();
         let err_slot = ctx.clone();
         let consumer: BaseConsumer<ConsumeCtx> =
@@ -205,14 +261,11 @@ impl KafkaSession {
                     break;
                 }
             }
-            // Only hard-fail early on ACL / DNS — GroupCoordinator SASL noise is common
-            // even when partition fetch still works.
+            // Only hard-fail early on ACL / DNS.
             if messages.is_empty() && last_msg.elapsed() > Duration::from_secs(2) {
                 if let Some(err) = err_slot.peek_error() {
-                    if err.contains("Group authorization") {
-                        return Err(format!(
-                            "Consumer group ACL denied for '{group_id}': {err}"
-                        ));
+                    if err.contains("authorization") {
+                        return Err(format!("ACL denied: {err}"));
                     }
                     if err.contains("Failed to resolve") {
                         return Err(err);
@@ -284,6 +337,8 @@ impl KafkaSession {
                     if !matches_decoded_message(&view, &filter) {
                         continue;
                     }
+                    let mut view = view;
+                    cap_message_value(&mut view, msg.payload_len());
 
                     messages.push(view);
                     let taken = taken_by_part.entry(partition).or_insert(0);
@@ -309,10 +364,8 @@ impl KafkaSession {
 
         if messages.is_empty() {
             if let Some(err) = err_slot.peek_error() {
-                if err.contains("Group authorization") {
-                    return Err(format!(
-                        "Consumer group ACL denied for '{group_id}': {err}"
-                    ));
+                if err.contains("authorization") {
+                    return Err(format!("ACL denied: {err}"));
                 }
                 if err.contains("Failed to resolve") {
                     return Err(err);
@@ -357,7 +410,7 @@ impl KafkaSession {
             return Ok(vec![]);
         }
         let limit = crate::domain::clamp_consume_limit(request.limit);
-        let (cfg, _group_id) = self.consume_client_config();
+        let cfg = self.consume_client_config();
         let ctx = ConsumeCtx::default();
         let err_slot = ctx.clone();
         let consumer: BaseConsumer<ConsumeCtx> =
@@ -451,6 +504,8 @@ impl KafkaSession {
                     if !matches_decoded_message(&view, &filter) {
                         continue;
                     }
+                    let mut view = view;
+                    cap_message_value(&mut view, msg.payload_len());
                     messages.push(view);
                 }
             }

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import EmptyState from './EmptyState'
 import TopicSchemaPanel from './TopicSchemaPanel'
-import type { TopicInfo } from '../types/kafdesk'
+import type { TopicInfo, TopicLagRow } from '../types/kafdesk'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
 import {
@@ -45,6 +45,7 @@ export default function TopicsSidebar({
   subjects,
   hasRegistry,
   onOpenSubjectInSchemas,
+  topicLag,
 }: {
   tr: Tr
   connected: boolean
@@ -58,7 +59,16 @@ export default function TopicsSidebar({
   subjects: string[]
   hasRegistry: boolean
   onOpenSubjectInSchemas?: (subject: string) => void
+  /** Consumer groups + lag per topic from the last group snapshot. */
+  topicLag?: TopicLagRow[]
 }) {
+  const [onlyWithLag, setOnlyWithLag] = useState(false)
+  const lagByTopic = useMemo(() => {
+    const m = new Map<string, TopicLagRow>()
+    for (const r of topicLag ?? []) m.set(r.topic, r)
+    return m
+  }, [topicLag])
+  const hasTopicLag = lagByTopic.size > 0
   const [topicsOpen, setTopicsOpen] = useState(() => loadTopicsOpen())
   const [topicsWidth, setTopicsWidth] = useState(() => loadTopicsWidth())
   const [resizing, setResizing] = useState(false)
@@ -160,7 +170,8 @@ export default function TopicsSidebar({
     const name = t.name.toLowerCase()
     const chipOk = chipQueries.length === 0 || chipQueries.some((q) => name.includes(q))
     const typedOk = !typedQuery || name.includes(typedQuery)
-    return chipOk && typedOk
+    const lagOk = !onlyWithLag || !hasTopicLag || (lagByTopic.get(t.name)?.totalLag ?? 0) > 0
+    return chipOk && typedOk && lagOk
   })
 
   const pinnedSet = new Set(pinnedTopics)
@@ -239,6 +250,7 @@ export default function TopicsSidebar({
   function renderTopic(t: TopicInfo) {
     const isPinned = pinnedSet.has(t.name)
     const active = selectedTopic === t.name
+    const lag = lagByTopic.get(t.name)
     return (
       <div key={t.name} className={`topic-row ${active ? 'active' : ''}`}>
         <button
@@ -262,6 +274,14 @@ export default function TopicsSidebar({
         >
           <span className="topic-name">{t.name}</span>
           <span className="topic-stats" aria-label={tr('partitionsCount', { n: t.partitions.length })}>
+            {lag && (
+              <span
+                className={`topic-stat topic-lag-stat${lag.totalLag > 0 ? ' has-lag' : ''}`}
+                title={tr('topicLagTitle', { groups: lag.groups, lag: lag.totalLag })}
+              >
+                {tr('topicLagShort', { groups: lag.groups, lag: lag.totalLag })}
+              </span>
+            )}
             {t.approxMessages != null && (
               <span className="topic-stat">{tr('topicMsgsShort', { n: t.approxMessages })}</span>
             )}
@@ -306,6 +326,17 @@ export default function TopicsSidebar({
       />
       <div className="topics-head">
         <label className="topics-head-label">{tr('topics', { n: visibleCount })}</label>
+        {hasTopicLag && (
+          <label className="topic-only-pinned" title={tr('topicsWithLagOnlyTitle')}>
+            <input
+              type="checkbox"
+              checked={onlyWithLag}
+              disabled={!connected}
+              onChange={(e) => setOnlyWithLag(e.target.checked)}
+            />
+            {tr('topicsWithLagOnly')}
+          </label>
+        )}
       </div>
       <div className="topic-filter-row">
         <input

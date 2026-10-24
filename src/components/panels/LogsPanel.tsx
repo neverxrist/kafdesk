@@ -1,10 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppLogEntry } from '../../hooks/useAppLogs'
 import type { useLocale } from '../../hooks/useLocale'
 
 type Tr = ReturnType<typeof useLocale>['tr']
 
 export const BACKEND_DEBUG_KEY = 'kafdesk.backendDebug'
+
+function WarnTipIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+      <path
+        d="M6 1.2 11 10.2H1L6 1.2Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M6 4.6v2.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <circle cx="6" cy="8.55" r="0.65" fill="currentColor" />
+    </svg>
+  )
+}
 
 export default function LogsPanel({
   tr,
@@ -19,19 +34,56 @@ export default function LogsPanel({
   backendDebug: boolean
   onBackendDebugChange: (enabled: boolean) => void
 }) {
+  const [hintOpen, setHintOpen] = useState(false)
+  const hintRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!hintOpen) return
+    function onDoc(e: MouseEvent) {
+      if (hintRef.current && !hintRef.current.contains(e.target as Node)) setHintOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setHintOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [hintOpen])
+
   return (
     <div className="logs-pane">
       <div className="logs-toolbar">
         <div className="logs-toolbar-left">
           <span className="status">{tr('entries', { n: logs.length })}</span>
-          <label className="logs-debug-toggle" title={tr('backendDebugTitle')}>
-            <input
-              type="checkbox"
-              checked={backendDebug}
-              onChange={(e) => onBackendDebugChange(e.target.checked)}
-            />
-            {tr('backendDebug')}
-          </label>
+          <div className="logs-debug-wrap">
+            <label className="logs-debug-toggle">
+              <input
+                type="checkbox"
+                checked={backendDebug}
+                onChange={(e) => onBackendDebugChange(e.target.checked)}
+              />
+              {tr('backendDebug')}
+            </label>
+            <div className="logs-debug-tip" ref={hintRef}>
+              <button
+                type="button"
+                className={`logs-debug-tip-btn${hintOpen ? ' open' : ''}`}
+                aria-expanded={hintOpen}
+                aria-label={tr('backendDebugHint')}
+                onClick={() => setHintOpen((v) => !v)}
+              >
+                <WarnTipIcon />
+              </button>
+              {hintOpen && (
+                <div className="logs-debug-popover" role="note">
+                  {tr('backendDebugHint')}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
         <button type="button" onClick={onClear}>
           {tr('clear')}

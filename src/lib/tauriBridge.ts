@@ -8,6 +8,7 @@ import type {
   ProduceBatchRequest,
   ProduceRequest,
   SetGroupOffsetsRequest,
+  TailBatch,
   TailRequest,
   UpdateStatus,
   KafkaMessageView,
@@ -46,6 +47,9 @@ export function installTauriKafdesk(): void {
     probe: (config: ClusterConfig) => invoke('kafka_probe', { config }),
     listTopics: () => invoke('kafka_list_topics'),
     getTopicOffsets: (topic: string) => invoke('kafka_get_topic_offsets', { topic }),
+    topicsOffsets: (topics: string[]) => invoke('kafka_topics_offsets', { topics }),
+    fetchMessage: (topic: string, partition: number, offset: string) =>
+      invoke('kafka_fetch_message', { topic, partition, offset }),
     consume: (request: ConsumeRequest) => invoke('kafka_consume', { request }),
     produce: (request: ProduceRequest) => invoke('kafka_produce', { request }),
     produceBatch: (request: ProduceBatchRequest) => invoke('kafka_produce_batch', { request }),
@@ -57,7 +61,12 @@ export function installTauriKafdesk(): void {
     listConsumerGroups: () => invoke('kafka_list_consumer_groups'),
     getGroupOffsets: (groupId: string, topic?: string) =>
       invoke('kafka_get_group_offsets', { groupId, topic }),
-    getLagSummary: (topic?: string) => invoke('kafka_get_lag_summary', { topic }),
+    describeConsumerGroup: (groupId: string) =>
+      invoke('kafka_describe_consumer_group', { groupId }),
+    getLagSummary: (topic?: string, groupIds?: string[]) =>
+      invoke('kafka_get_lag_summary', { topic, groupIds }),
+    refreshGroupSnapshot: () => invoke('kafka_refresh_group_snapshot'),
+    topicConsumers: (topic: string) => invoke('kafka_topic_consumers', { topic }),
     setGroupOffsets: (request: SetGroupOffsetsRequest) =>
       invoke('kafka_set_group_offsets', { request }),
     resetGroupOffsets: (groupId: string, topic: string, earliest: boolean) =>
@@ -65,8 +74,8 @@ export function installTauriKafdesk(): void {
     tailStart: (request: TailRequest) => invoke('kafka_tail_start', { request }),
     tailStop: () => invoke('kafka_tail_stop'),
     tailSetFilter: (request: TailRequest) => invoke('kafka_tail_set_filter', { request }),
-    onTailMessage: (cb: (msg: KafkaMessageView) => void) =>
-      listenSafe<KafkaMessageView>('kafka://tail-message', cb),
+    onTailBatch: (cb: (batch: TailBatch) => void) =>
+      listenSafe<TailBatch>('kafka://tail-batch', cb),
     onTailError: (cb: (message: string) => void) =>
       listenSafe<string>('kafka://tail-error', cb),
     setBackendDebug: (enabled: boolean) => invoke('set_backend_debug', { enabled }),

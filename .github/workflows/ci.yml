@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Fast gate on Linux only: typecheck + Rust unit tests + clippy (correctness/suspicious).
+# Live-broker smoke test is #[ignore]d and needs KAFDESK_SMOKE_BROKERS — not run here.
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ci-linux
+
+      - name: Install deps (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config build-essential \
+            zlib1g-dev libzstd-dev liblz4-dev \
+            libssl-dev libsasl2-dev libcurl4-openssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+          sudo rm -f /usr/local/bin/cmake || true
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Clippy
+        run: >
+          cargo clippy --manifest-path src-tauri/Cargo.toml --lib --tests --
+          -D clippy::correctness -D clippy::suspicious

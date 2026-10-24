@@ -134,6 +134,8 @@ export interface KafkaMessageView {
   format: MessageFormat
   headers: Record<string, string>
   schemaId?: number
+  /** Original payload size when `value` is a capped preview */
+  truncatedBytes?: number
 }
 
 export type ConsumeStartFrom = 'beginning' | 'end' | 'offset'
@@ -168,6 +170,28 @@ export interface ConsumerGroupInfo {
   maxPartitionLag?: number
   lagTopics?: number
   lagPartitions?: number
+  topicNames?: string[]
+}
+
+export interface GroupMemberAssignment {
+  topic: string
+  partition: number
+}
+
+export interface GroupMemberInfo {
+  memberId: string
+  clientId: string
+  host: string
+  assignment: GroupMemberAssignment[]
+}
+
+export interface ConsumerGroupDetail {
+  groupId: string
+  state?: string
+  memberCount: number
+  coordinatorId?: number
+  members: GroupMemberInfo[]
+  topics: string[]
 }
 
 export interface GroupLagSummary {
@@ -178,6 +202,7 @@ export interface GroupLagSummary {
   partitions: number
   worstTopic?: string
   worstPartition?: number
+  topicNames?: string[]
 }
 
 export interface LagSummaryResult {
@@ -185,6 +210,67 @@ export interface LagSummaryResult {
   totalLag: number
   maxLag: number
   updatedAt: number
+  /** list_consumer_groups size at start of this lag walk */
+  listed?: number
+  /** groups we queried offsets for before the time cap */
+  scanned?: number
+  /** walk stopped early (6s) — lag totals incomplete */
+  partial?: boolean
+}
+
+export type LagTrend = 'up' | 'down' | 'flat'
+
+export interface SnapshotGroupRow {
+  groupId: string
+  state?: string | null
+  members: number
+  /** null when committed offsets could not be read (see error) */
+  totalLag: number | null
+  maxPartitionLag: number
+  topics: number
+  topicNames: string[]
+  trend?: LagTrend | null
+  /** lag > 0, committed frozen, log end growing over recent snapshots */
+  stalled: boolean
+  /** total lag per snapshot, oldest first (≤ 20) */
+  history: number[]
+  error?: string | null
+}
+
+export interface TopicLagRow {
+  topic: string
+  groups: number
+  totalLag: number
+}
+
+export interface GroupSnapshotView {
+  updatedAt: number
+  durationMs: number
+  listed: number
+  scanned: number
+  failed: number
+  partial: boolean
+  groups: SnapshotGroupRow[]
+  topics: TopicLagRow[]
+}
+
+export interface TopicConsumerRow {
+  groupId: string
+  state?: string | null
+  members: number
+  lag: number | null
+  maxPartitionLag: number
+  trend?: LagTrend | null
+  stalled: boolean
+  history: number[]
+  partitions: GroupOffsetEntry[]
+}
+
+export interface TopicConsumersView {
+  topic: string
+  updatedAt: number
+  partial: boolean
+  groups: TopicConsumerRow[]
 }
 
 export interface GroupOffsetEntry {
@@ -206,6 +292,12 @@ export interface SetGroupOffsetsRequest {
 export interface TailResumeOffset {
   partition: number
   offset: number
+}
+
+/** Live tail flush (oldest → newest); `dropped` = evicted because rate exceeded the cap */
+export interface TailBatch {
+  messages: KafkaMessageView[]
+  dropped: number
 }
 
 export interface TailRequest {

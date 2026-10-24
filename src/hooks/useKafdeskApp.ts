@@ -192,9 +192,22 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [groupQuery, setGroupQuery] = useState('')
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
   const [groupOffsets, setGroupOffsets] = useState<GroupOffsetEntry[]>([])
+  const [groupDetail, setGroupDetail] = useState<
+    import('../types/kafdesk').ConsumerGroupDetail | null
+  >(null)
   const [movePartition, setMovePartition] = useState('0')
   const [moveOffset, setMoveOffset] = useState('0')
-  const [lagSummary, setLagSummary] = useState<import('../types/kafdesk').LagSummaryResult | null>(null)
+  const [groupSnapshot, setGroupSnapshot] = useState<
+    import('../types/kafdesk').GroupSnapshotView | null
+  >(null)
+  const groupSnapshotRef = useRef<import('../types/kafdesk').GroupSnapshotView | null>(null)
+  groupSnapshotRef.current = groupSnapshot
+  /** Groups that committed on the selected topic — from the last snapshot. */
+  const [topicConsumers, setTopicConsumers] = useState<
+    import('../types/kafdesk').TopicConsumersView | null
+  >(null)
+  const [snapshotLoading, setSnapshotLoading] = useState(false)
+  const snapshotLoadingRef = useRef(false)
   const [lagAutoRefresh, setLagAutoRefresh] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<import('../types/kafdesk').UpdateStatus>({
     state: 'idle',
@@ -204,6 +217,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   const [tailing, setTailing] = useState(false)
   const tailingRef = useRef(false)
   const [tailMessages, setTailMessages] = useState<KafkaMessageView[]>([])
+  const [tailDropped, setTailDropped] = useState(0)
 
   const [authSession, setAuthSession] = useState<AuthSessionPublic>({
     providerId: 'keycloak',
@@ -262,15 +276,21 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     void window.kafdesk.authSession().then(setAuthSession)
     void window.kafdesk.updateSettings?.().then((s) => setUpdateAuto(s.autoUpdate))
     void refreshStoredCreds()
-    const offTail = window.kafdesk.onTailMessage((msg) => {
+    const offTail = window.kafdesk.onTailBatch((batch) => {
       // Ignore late emits after Stop (in-flight decode / IPC race).
       if (!tailingRef.current) return
-      const slim = slimMessageForUi(msg)
-      const id = messageId(slim)
+      const incoming = batch.messages.map(slimMessageForUi).reverse()
       setTailMessages((prev) => {
-        if (prev.some((m) => messageId(m) === id)) return prev
-        return [slim, ...prev].slice(0, 100)
+        const seen = new Set(prev.map(messageId))
+        const fresh = incoming.filter((m) => {
+          const id = messageId(m)
+          if (seen.has(id)) return false
+          seen.add(id)
+          return true
+        })
+        return fresh.length ? [...fresh, ...prev].slice(0, 100) : prev
       })
+      if (batch.dropped > 0) setTailDropped((n) => n + batch.dropped)
     })
     const offTailErr = window.kafdesk.onTailError?.((message) => {
       tailingRef.current = false
@@ -292,13 +312,34 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-refresh the group snapshot only while the Groups tab is open.
   useEffect(() => {
     if (tab !== 'groups' || !connected || !lagAutoRefresh) return
     const id = setInterval(() => {
-      void loadLagSummary(true)
-    }, 10_000)
+      void refreshGroupSnapshot(true)
+    }, 30_000)
     return () => clearInterval(id)
-  }, [tab, connected, lagAutoRefresh, selectedTopic]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, connected, lagAutoRefresh]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Topic → its consumer groups, read from the cached snapshot (no Kafka calls).
+  useEffect(() => {
+    if (!connected || !selectedTopic || !groupSnapshot) {
+      setTopicConsumers(null)
+      return
+    }
+    let cancelled = false
+    void window.kafdesk
+      .topicConsumers?.(selectedTopic)
+      .then((v) => {
+        if (!cancelled) setTopicConsumers(v ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setTopicConsumers(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [connected, selectedTopic, groupSnapshot])
 
   useEffect(() => {
     // Only leave Schemas after a real disconnect of SR — not during initial 'none'.
@@ -718,11 +759,14 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       tailingRef.current = false
       setTailing(false)
       setTailMessages([])
+      setTailDropped(0)
       setSelectedTopic(null)
       setTopicDetails(null)
       setTopicGroupLags(null)
       setMessages([])
       setGroups([])
+      setGroupSnapshot(null)
+      setTopicConsumers(null)
       setSelectedGroup(null)
       setGroupOffsets([])
     }
@@ -750,6 +794,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         tailingRef.current = false
         setTailing(false)
         setTailMessages([])
+        setTailDropped(0)
       }
       try {
         await window.kafdesk.disconnect()
@@ -849,11 +894,14 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setMessages([])
       setPingInfo(null)
       setGroups([])
+      setGroupSnapshot(null)
+      setTopicConsumers(null)
       setSelectedGroup(null)
       setGroupOffsets([])
       tailingRef.current = false
       setTailing(false)
       setTailMessages([])
+      setTailDropped(0)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setConnected(false)
@@ -927,6 +975,25 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
             : p
         }),
       )
+    }
+
+    if (window.kafdesk.topicsOffsets) {
+      const BATCH = 500
+      let batchFailed = false
+      for (let i = 0; i < list.length; i += BATCH) {
+        if (enrichGenRef.current !== gen) return
+        try {
+          const rows = await window.kafdesk.topicsOffsets(list.slice(i, i + BATCH).map((t) => t.name))
+          if (enrichGenRef.current !== gen) return
+          for (const r of rows) merged.set(r.name, r)
+          flush()
+        } catch {
+          batchFailed = true
+          cursor = i
+          break
+        }
+      }
+      if (!batchFailed) return
     }
 
     async function worker() {
@@ -1049,6 +1116,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
     setMessages([])
     setTailMessages([])
+    setTailDropped(0)
     setDiffMessages([])
     setTopicDetails(null)
     setTopicGroupLags(null)
@@ -1084,10 +1152,25 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       if (selectedTopicRef.current !== name) return
       // After messages — never race GroupCoordinator against consume.
       // Keep [] (not null) on failure so the «Читают» row stays visible.
+      const snap = groupSnapshotRef.current
+      if (snap && Date.now() - snap.updatedAt < 120_000 && window.kafdesk.topicConsumers) {
+        void window.kafdesk
+          .topicConsumers(name)
+          .then((v) => {
+            if (selectedTopicRef.current !== name || !v) return
+            setTopicGroupLags(v.groups.map((g) => ({ groupId: g.groupId, totalLag: g.lag ?? 0 })))
+          })
+          .catch(() => {
+            if (selectedTopicRef.current === name) setTopicGroupLags([])
+          })
+        return
+      }
       void window.kafdesk
         .getLagSummary?.(name)
         .then((res) => {
           if (selectedTopicRef.current !== name) return
+          // updatedAt=0 = background-busy stub — don't wipe chips with zeros.
+          if (res.updatedAt <= 0) return
           setTopicGroupLags(
             res.groups.map((g) => ({ groupId: g.groupId, totalLag: g.totalLag })),
           )
@@ -1129,6 +1212,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     }
     if (prev === 'tail' && next !== 'tail') {
       setTailMessages([])
+      setTailDropped(0)
       if (tailing) {
         tailingRef.current = false
         setTailing(false)
@@ -1311,46 +1395,49 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function loadGroups() {
-    setBusy(true)
-    setError(null)
-    try {
-      setGroups(await window.kafdesk.listConsumerGroups())
-      await loadLagSummary(true)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
+    await refreshGroupSnapshot(false)
+  }
+
+  function snapshotRowToGroup(
+    r: import('../types/kafdesk').SnapshotGroupRow,
+  ): ConsumerGroupInfo {
+    return {
+      groupId: r.groupId,
+      protocolType: 'consumer',
+      state: r.state ?? undefined,
+      members: r.members,
+      totalLag: r.totalLag ?? undefined,
+      maxPartitionLag: r.maxPartitionLag,
+      lagTopics: r.topics,
+      topicNames: r.topicNames,
     }
   }
 
-  async function loadLagSummary(silent = false) {
-    if (!window.kafdesk?.getLagSummary) return
-    if (!silent) {
-      setBusy(true)
-      setError(null)
-    }
+  /** Cluster-wide snapshot: list + committed offsets + end offsets in one pass. */
+  async function refreshGroupSnapshot(silent = false) {
+    if (!window.kafdesk?.refreshGroupSnapshot) return
+    if (snapshotLoadingRef.current) return
+    snapshotLoadingRef.current = true
+    setSnapshotLoading(true)
     try {
-      const res = await window.kafdesk.getLagSummary(selectedTopic || undefined)
-      setLagSummary(res)
-      // merge lag into group list rows
-      setGroups((prev) =>
-        prev.map((g) => {
-          const s = res.groups.find((x) => x.groupId === g.groupId)
-          return s
-            ? {
-                ...g,
-                totalLag: s.totalLag,
-                maxPartitionLag: s.maxPartitionLag,
-                lagTopics: s.topics,
-                lagPartitions: s.partitions,
-              }
-            : g
-        }),
-      )
+      const view = await window.kafdesk.refreshGroupSnapshot()
+      // null = background slot busy — keep the previous snapshot.
+      if (!view) return
+      setGroupSnapshot(view)
+      setGroups(view.groups.map(snapshotRowToGroup))
     } catch (err) {
-      if (!silent) setError(err instanceof Error ? err.message : String(err))
+      // Soft surface — ErrorModal blur is for connect/auth, not lag walk noise.
+      if (!silent) setPingInfo(stripIpcError(err instanceof Error ? err.message : String(err)))
+      // Keep the tab usable: plain list without lag.
+      try {
+        const list = await window.kafdesk.listConsumerGroups()
+        setGroups((prev) => (prev.length ? prev : list))
+      } catch {
+        /* banner already shows the snapshot error */
+      }
     } finally {
-      if (!silent) setBusy(false)
+      snapshotLoadingRef.current = false
+      setSnapshotLoading(false)
     }
   }
 
@@ -1402,17 +1489,40 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   async function selectGroup(groupId: string) {
     setSelectedGroup(groupId)
+    setGroupDetail(null)
     setBusy(true)
     setError(null)
     try {
-      const rows = await window.kafdesk.getGroupOffsets(groupId, selectedTopic || undefined)
+      const [rows, detail] = await Promise.all([
+        // All topics of the group — sidebar topic is only highlighted / sorted first.
+        window.kafdesk.getGroupOffsets(groupId),
+        window.kafdesk.describeConsumerGroup?.(groupId).catch(() => null),
+      ])
       setGroupOffsets(rows)
-      if (rows[0]) {
-        setMovePartition(String(rows[0].partition))
-        setMoveOffset(rows[0].offset)
+      if (detail) {
+        setGroupDetail(detail)
+        setGroups((prev) =>
+          prev.map((g) =>
+            g.groupId === groupId
+              ? {
+                  ...g,
+                  state: detail.state ?? g.state,
+                  members: detail.memberCount,
+                  topicNames: detail.topics.length
+                    ? detail.topics.slice(0, 6)
+                    : g.topicNames,
+                }
+              : g,
+          ),
+        )
+      }
+      const first = rows.find((r) => r.topic === selectedTopic) ?? rows[0]
+      if (first) {
+        setMovePartition(String(first.partition))
+        setMoveOffset(first.offset)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setPingInfo(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
@@ -1725,6 +1835,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setPartitionFilter: setPartitionFilterUI,
     tailing,
     tailBufferCount: tailMessages.length,
+    tailDropped,
     tailMessages: filterMessages(tailMessages, {
       search,
       searchKey,
@@ -1766,10 +1877,13 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     moveOffset,
     setMoveOffset,
     groupOffsets,
-    lagSummary,
+    groupDetail,
+    groupSnapshot,
+    topicConsumers,
+    snapshotLoading,
     lagAutoRefresh,
     setLagAutoRefresh,
-    loadLagSummary,
+    refreshGroupSnapshot,
     updateStatus,
     checkForUpdates,
     openDownloadedUpdate,

@@ -2,17 +2,24 @@ use crate::avro_codec::decode_datum_to_json;
 use crate::sr::SchemaRegistryClient;
 use crate::types::*;
 use super::decode::{
-    decode_owned_message, decode_with_avro_json, headers_from_message, strip_confluent_wire,
+    cap_message_value, decode_owned_message, decode_with_avro_json, headers_from_message,
+    strip_confluent_wire,
 };
 use super::session::KafkaSession;
 use rdkafka::consumer::Consumer;
+use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::Message;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use super::session::SConsumer;
+
+/// UI buffer cap — older messages inside one flush window would be evicted anyway.
+const TAIL_BATCH_CAP: usize = 100;
+/// At most ~4 IPC events/s regardless of topic rate.
+const TAIL_FLUSH: Duration = Duration::from_millis(250);
 
 impl KafkaSession {
     pub async fn start_tail(
@@ -23,19 +30,33 @@ impl KafkaSession {
         self.ensure_admin()?;
         self.stop_tail().await;
 
+        // assign() to End of every partition — no rebalances, nothing committed.
+        // assign() still requires `group.id`; reuse the stable consume id.
         let mut cfg = self.base_config.clone();
-        cfg.set(
-            "group.id",
-            format!("kafdesk-tail-{}", uuid::Uuid::new_v4()),
-        );
+        cfg.set("group.id", self.consume_group_id());
+        cfg.set("coordinator.query.interval.ms", "600000");
         cfg.set("enable.auto.commit", "false");
         cfg.set("auto.offset.reset", "latest");
         let consumer: SConsumer = cfg
             .create_with_context(super::consume_ctx::KafdeskCtx::default())
             .map_err(|e| e.to_string())?;
-        consumer
-            .subscribe(&[&request.topic])
+        let meta = consumer
+            .fetch_metadata(Some(&request.topic), Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
+        let mut tpl = TopicPartitionList::new();
+        if let Some(t) = meta.topics().iter().find(|t| t.name() == request.topic) {
+            if let Some(err) = t.error() {
+                return Err(format!("Topic {}: {:?}", request.topic, err));
+            }
+            for p in t.partitions() {
+                tpl.add_partition_offset(&request.topic, p.id(), Offset::End)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        if tpl.count() == 0 {
+            return Err(format!("Topic not found: {}", request.topic));
+        }
+        consumer.assign(&tpl).map_err(|e| e.to_string())?;
 
         self.tailing.store(true, Ordering::SeqCst);
 
@@ -55,8 +76,16 @@ impl KafkaSession {
             use futures::StreamExt;
             let mut stream = consumer.stream();
             let mut schema_cache: HashMap<i32, String> = HashMap::new();
+            let mut pending: VecDeque<KafkaMessageView> = VecDeque::new();
+            let mut dropped: u64 = 0;
+            let mut last_flush = Instant::now() - TAIL_FLUSH;
             while tailing.load(Ordering::SeqCst) {
-                match tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
+                let wait = if pending.is_empty() {
+                    Duration::from_millis(500)
+                } else {
+                    TAIL_FLUSH.saturating_sub(last_flush.elapsed())
+                };
+                match tokio::time::timeout(wait, stream.next()).await {
                     Ok(Some(Ok(msg))) => {
                         let partition = msg.partition();
                         {
@@ -77,7 +106,8 @@ impl KafkaSession {
                             | rdkafka::Timestamp::LogAppendTime(ms) => ms,
                             _ => 0,
                         };
-                        let view = decode_tail_message(
+                        let payload_len = msg.payload_len();
+                        let mut view = decode_tail_message(
                             &registry,
                             &mut schema_cache,
                             msg.topic(),
@@ -89,11 +119,12 @@ impl KafkaSession {
                             headers,
                         )
                         .await;
-                        // Drop anything decoded after Stop (race with abort).
-                        if !tailing.load(Ordering::SeqCst) {
-                            break;
+                        cap_message_value(&mut view, payload_len);
+                        pending.push_back(view);
+                        if pending.len() > TAIL_BATCH_CAP {
+                            pending.pop_front();
+                            dropped += 1;
                         }
-                        let _ = app.emit("kafka://tail-message", &view);
                     }
                     Ok(Some(Err(e))) => {
                         let _ = app.emit("kafka://tail-error", e.to_string());
@@ -101,7 +132,20 @@ impl KafkaSession {
                         break;
                     }
                     Ok(None) => break,
-                    Err(_) => continue,
+                    Err(_) => {}
+                }
+                if !pending.is_empty() && last_flush.elapsed() >= TAIL_FLUSH {
+                    // Drop anything decoded after Stop (race with abort).
+                    if !tailing.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let batch = TailBatch {
+                        messages: pending.drain(..).collect(),
+                        dropped,
+                    };
+                    let _ = app.emit("kafka://tail-batch", &batch);
+                    dropped = 0;
+                    last_flush = Instant::now();
                 }
             }
         });

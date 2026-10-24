@@ -158,6 +158,9 @@ pub struct KafkaMessageView {
     pub headers: HashMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema_id: Option<i32>,
+    /// Original payload size when `value` was cut to a preview (see `cap_message_value`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +279,14 @@ pub struct TailResumeOffset {
     pub offset: i64,
 }
 
+/// Live tail flush: oldest → newest. `dropped` = messages evicted in this window (rate > cap).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TailBatch {
+    pub messages: Vec<KafkaMessageView>,
+    pub dropped: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TailRequest {
@@ -316,6 +327,41 @@ pub struct ConsumerGroupInfo {
     pub lag_topics: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lag_partitions: Option<usize>,
+    /// Topic names seen in lag walk / describe (for list pills).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topic_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMemberAssignment {
+    pub topic: String,
+    pub partition: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMemberInfo {
+    pub member_id: String,
+    pub client_id: String,
+    pub host: String,
+    #[serde(default)]
+    pub assignment: Vec<GroupMemberAssignment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumerGroupDetail {
+    pub group_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    pub member_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coordinator_id: Option<i32>,
+    pub members: Vec<GroupMemberInfo>,
+    /// Distinct topics from current member assignments.
+    #[serde(default)]
+    pub topics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,6 +406,9 @@ pub struct GroupLagSummary {
     pub worst_topic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worst_partition: Option<i32>,
+    /// Up to a few topic names for UI pills (from committed offsets).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topic_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +418,80 @@ pub struct LagSummaryResult {
     pub total_lag: i64,
     pub max_lag: i64,
     pub updated_at: i64,
+    /// Groups returned by list_consumer_groups at start of this walk.
+    #[serde(default)]
+    pub listed: usize,
+    /// How many groups we actually asked offsets for before the time cap.
+    #[serde(default)]
+    pub scanned: usize,
+    /// True if the 6s walk stopped early — lag totals are incomplete.
+    #[serde(default)]
+    pub partial: bool,
+}
+
+/// One group row of the cluster-wide group snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotGroupRow {
+    pub group_id: String,
+    pub state: Option<String>,
+    pub members: usize,
+    /// None when committed offsets could not be read (see `error`).
+    pub total_lag: Option<i64>,
+    pub max_partition_lag: i64,
+    pub topics: usize,
+    pub topic_names: Vec<String>,
+    /// "up" | "down" | "flat" vs the previous snapshot.
+    pub trend: Option<String>,
+    /// Lag > 0, committed offsets unchanged, log end growing across recent snapshots.
+    pub stalled: bool,
+    /// Total lag per snapshot, oldest first (≤ 20 points).
+    pub history: Vec<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicLagRow {
+    pub topic: String,
+    pub groups: usize,
+    pub total_lag: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupSnapshotView {
+    pub updated_at: i64,
+    pub duration_ms: u64,
+    pub listed: usize,
+    pub scanned: usize,
+    pub failed: usize,
+    pub partial: bool,
+    pub groups: Vec<SnapshotGroupRow>,
+    pub topics: Vec<TopicLagRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConsumerRow {
+    pub group_id: String,
+    pub state: Option<String>,
+    pub members: usize,
+    pub lag: Option<i64>,
+    pub max_partition_lag: i64,
+    pub trend: Option<String>,
+    pub stalled: bool,
+    pub history: Vec<i64>,
+    pub partitions: Vec<GroupOffsetEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConsumersView {
+    pub topic: String,
+    pub updated_at: i64,
+    pub partial: bool,
+    pub groups: Vec<TopicConsumerRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

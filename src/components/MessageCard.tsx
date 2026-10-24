@@ -7,6 +7,7 @@ import { messageBodyText, messageId } from '../lib/messageText'
 import type { MessageViewMode } from '../lib/messageView'
 import { searchHighlightQueries, searchHitsNeedles, type SearchClause } from '../lib/searchScope'
 import { highlightSearchMatches } from '../lib/searchHighlight'
+import TruncatedValueNotice, { useFullMessage } from './TruncatedValueNotice'
 
 /** Collapsed preview ≈ 2 lines; shorter bodies stay fully open. */
 const PREVIEW_MAX_LINES = 2
@@ -110,7 +111,7 @@ function CheckIcon() {
 }
 
 export default function MessageCard({
-  message: m,
+  message,
   keyLabel = 'key',
   viewMode = 'full',
   selectedForDiff = false,
@@ -149,8 +150,13 @@ export default function MessageCard({
     copied: string
     headers?: string
     inspect?: string
+    /** `{size}` → original payload size */
+    truncated?: string
+    loadFull?: string
   }
 }) {
+  const full = useFullMessage(message)
+  const m = full.shown ?? message
   const headerEntries = Object.entries(m.headers || {})
   const when = formatMessageDateTime(m.timestamp)
   const id = messageId(m)
@@ -330,6 +336,18 @@ export default function MessageCard({
     </div>
   ) : null
 
+  const truncatedNotice =
+    m.truncatedBytes && labels?.truncated && labels.loadFull ? (
+      <TruncatedValueNotice
+        bytes={m.truncatedBytes}
+        text={labels.truncated}
+        action={labels.loadFull}
+        loading={full.loading}
+        error={full.error}
+        onLoad={() => void full.load()}
+      />
+    ) : null
+
   const diffClass = diffSlot
     ? ` msg-diff-selected msg-diff-slot-${diffSlot}`
     : selectedForDiff
@@ -398,6 +416,7 @@ export default function MessageCard({
                   {copied ? <CheckIcon /> : <CopyIcon />}
                 </button>
               )}
+              {truncatedNotice}
               <pre className="msg-body">{highlighted}</pre>
             </div>
           </>
@@ -445,6 +464,7 @@ export default function MessageCard({
             {copied ? <CheckIcon /> : <CopyIcon />}
           </button>
         )}
+        {truncatedNotice}
         {showFullBody ? (
           <pre className="msg-body">{highlighted}</pre>
         ) : (

@@ -29,3 +29,23 @@ pub fn consume_idle_ms(has_filter: bool) -> u64 {
         800
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_consume_limit_bounds() {
+        assert_eq!(clamp_consume_limit(None), 30);
+        assert_eq!(clamp_consume_limit(Some(0)), 1);
+        assert_eq!(clamp_consume_limit(Some(-5)), 1);
+        assert_eq!(clamp_consume_limit(Some(500)), 500);
+        assert_eq!(clamp_consume_limit(Some(1_000_000)), CONSUME_LIMIT_MAX);
+    }
+
+    #[test]
+    fn consume_wait_is_capped() {
+        assert_eq!(consume_wait_ms(1000, 200, true, "beginning"), 12_000);
+        assert!(consume_wait_ms(1, 1, false, "end") < 12_000);
+    }
+}

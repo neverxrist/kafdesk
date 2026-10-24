@@ -211,3 +211,39 @@ pub fn sort_messages_by_time(mut messages: Vec<KafkaMessageView>, newest_first: 
     });
     messages
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn key_search_is_case_insensitive_substring() {
+        let f = BrokerMessageFilter { search_key: Some(" Order-1 ".into()), ..Default::default() };
+        assert!(matches_raw_pre_filter(Some(b"ORDER-123"), "0", &HashMap::new(), &f));
+        assert!(!matches_raw_pre_filter(Some(b"user-1"), "0", &HashMap::new(), &f));
+        assert!(!matches_raw_pre_filter(None, "0", &HashMap::new(), &f));
+    }
+
+    #[test]
+    fn header_key_and_value_must_match_same_header() {
+        let f = BrokerMessageFilter {
+            header_key: Some("trace".into()),
+            header_value: Some("abc".into()),
+            ..Default::default()
+        };
+        let same = headers(&[("X-Trace-Id", "ABC-1")]);
+        let split = headers(&[("X-Trace-Id", "zzz"), ("other", "abc")]);
+        assert!(matches_raw_pre_filter(None, "0", &same, &f));
+        assert!(!matches_raw_pre_filter(None, "0", &split, &f));
+    }
+
+    #[test]
+    fn empty_filter_matches_everything() {
+        let f = BrokerMessageFilter::default();
+        assert!(matches_raw_pre_filter(None, "0", &HashMap::new(), &f));
+    }
+}

@@ -11,13 +11,17 @@ use tokio::sync::{Mutex, Semaphore};
 
 /// Hot path (offsets + consume) — never share with GroupCoordinator lag walks.
 const KAFKA_HOT_SLOTS: usize = 2;
-/// Background (lag / enrich-friendly). try_acquire only — never blocks hot path.
+/// Background user actions (list / describe / group offsets) — short, may wait.
 const KAFKA_BG_SLOTS: usize = 1;
+/// Long cluster walks (group snapshot / lag summary). try_acquire only, own lane so a
+/// 25s walk never blocks a click on a group.
+const KAFKA_WALK_SLOTS: usize = 1;
 
 pub struct AppState {
     pub kafka: Mutex<KafkaSession>,
     pub kafka_hot: Arc<Semaphore>,
     pub kafka_bg: Arc<Semaphore>,
+    pub kafka_walk: Arc<Semaphore>,
     /// Bumped on each consume start — older poll loops exit so topic switches don't queue.
     pub consume_gen: Arc<AtomicU64>,
     pub auth: AuthState,
@@ -30,6 +34,7 @@ impl AppState {
             kafka: Mutex::new(KafkaSession::new()),
             kafka_hot: Arc::new(Semaphore::new(KAFKA_HOT_SLOTS)),
             kafka_bg: Arc::new(Semaphore::new(KAFKA_BG_SLOTS)),
+            kafka_walk: Arc::new(Semaphore::new(KAFKA_WALK_SLOTS)),
             consume_gen: Arc::new(AtomicU64::new(0)),
             auth: AuthState::new(),
             updates: UpdateState::new(),
@@ -245,14 +250,14 @@ where
     .map_err(|e| format!("kafka worker join: {e}"))?
 }
 
-/// Lag walk — never queue behind / block UI; skip if bg slot taken.
-async fn with_session_worker_bg_try<T, F>(state: &AppState, op: F) -> Result<T, String>
+/// Cluster walk — never queue behind / block UI; skip if the walk lane is taken.
+async fn with_session_worker_walk_try<T, F>(state: &AppState, op: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(KafkaSession) -> Result<T, String> + Send + 'static,
 {
     let permit = state
-        .kafka_bg
+        .kafka_walk
         .clone()
         .try_acquire_owned()
         .map_err(|_| "Kafka background busy".to_string())?;
@@ -293,6 +298,20 @@ pub async fn kafka_get_topic_offsets(
     let result = with_session_worker(&state, move |session| session.get_topic_offsets(&topic)).await;
     if let Err(e) = &result {
         crate::debug_log!(&app, "error", "topic_offsets {topic_name} failed: {e}");
+    }
+    result
+}
+
+/// Batched watermarks for the sidebar (≈msgs per topic) — one call instead of N.
+#[tauri::command]
+pub async fn kafka_topics_offsets(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    topics: Vec<String>,
+) -> Result<Vec<TopicInfo>, String> {
+    let result = with_session_worker(&state, move |session| session.topics_with_offsets(&topics)).await;
+    if let Err(e) = &result {
+        crate::debug_log!(&app, "error", "topics_offsets failed: {e}");
     }
     result
 }
@@ -372,6 +391,33 @@ pub async fn kafka_consume(
         Err(e) => crate::debug_log!(&app, "error", "consume failed: {e}"),
     }
     result
+}
+
+/// Full value for one message (list rows are capped at `MAX_VALUE_BYTES`).
+#[tauri::command]
+pub async fn kafka_fetch_message(
+    state: State<'_, Arc<AppState>>,
+    topic: String,
+    partition: i32,
+    offset: String,
+) -> Result<KafkaMessageView, String> {
+    let offset: i64 = offset.trim().parse().map_err(|_| format!("Bad offset: {offset}"))?;
+    let permit = state
+        .kafka_hot
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "Kafka worker interrupted".to_string())?;
+    let worker = {
+        let guard = state.kafka.lock().await;
+        guard.clone_for_worker()?
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        futures::executor::block_on(worker.fetch_message(&topic, partition, offset))
+    })
+    .await
+    .map_err(|e| format!("fetch message join: {e}"))?
 }
 
 #[tauri::command]
@@ -475,13 +521,48 @@ pub async fn kafka_get_group_offsets(
 }
 
 #[tauri::command]
+pub async fn kafka_describe_consumer_group(
+    state: State<'_, Arc<AppState>>,
+    group_id: String,
+) -> Result<ConsumerGroupDetail, String> {
+    with_session_worker_bg(&state, move |session| {
+        session.describe_consumer_group(&group_id)
+    })
+    .await
+}
+
+/// Cluster-wide group snapshot. `None` = walk lane busy (keep the previous view).
+#[tauri::command]
+pub async fn kafka_refresh_group_snapshot(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<GroupSnapshotView>, String> {
+    match with_session_worker_walk_try(&state, |session| session.refresh_group_snapshot()).await {
+        Err(e) if e.contains("background busy") => Ok(None),
+        other => other.map(Some),
+    }
+}
+
+/// Groups that committed on `topic`, from the last snapshot (no Kafka calls).
+#[tauri::command]
+pub async fn kafka_topic_consumers(
+    state: State<'_, Arc<AppState>>,
+    topic: String,
+) -> Result<Option<TopicConsumersView>, String> {
+    let guard = state.kafka.lock().await;
+    Ok(guard.topic_consumers(&topic))
+}
+
+#[tauri::command]
 pub async fn kafka_get_lag_summary(
     state: State<'_, Arc<AppState>>,
     topic: Option<String>,
+    group_ids: Option<Vec<String>>,
 ) -> Result<LagSummaryResult, String> {
     // Lag walks groups via coordinator — try_acquire only (never modal "busy" on click).
-    match with_session_worker_bg_try(&state, move |session| {
-        session.get_lag_summary(topic.as_deref())
+    // group_ids = exact UI filter selection (keyword search), not a second list+substring pass.
+    let ids = group_ids.unwrap_or_default();
+    match with_session_worker_walk_try(&state, move |session| {
+        session.get_lag_summary(topic.as_deref(), ids)
     })
     .await
     {
@@ -490,6 +571,9 @@ pub async fn kafka_get_lag_summary(
             total_lag: 0,
             max_lag: 0,
             updated_at: 0,
+            listed: 0,
+            scanned: 0,
+            partial: true,
         }),
         other => other,
     }

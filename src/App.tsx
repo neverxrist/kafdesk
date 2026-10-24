@@ -7,7 +7,7 @@ import TopicsSidebar from './components/TopicsSidebar'
 import ConsumePanel, { ConsumeToolbar } from './components/panels/ConsumePanel'
 import TailPanel, { TailToolbar } from './components/panels/TailPanel'
 import ProducePanel from './components/panels/ProducePanel'
-import GroupsPanel from './components/panels/GroupsPanel'
+import GroupsPanel, { type GroupsMode } from './components/panels/GroupsPanel'
 import SchemasPanel from './components/panels/SchemasPanel'
 import LogsPanel, { useBackendDebugSync } from './components/panels/LogsPanel'
 import SettingsPanel from './components/panels/SettingsPanel'
@@ -32,6 +32,7 @@ export default function App() {
   const [backendDebug, setBackendDebug] = useBackendDebugSync(pushLog)
   const a = useKafdeskApp(pushLog)
   const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false)
+  const [groupsMode, setGroupsMode] = useState<GroupsMode>('topic')
   const tabBeforeOverlay = useRef<AppTab>('consume')
 
   useEffect(() => {
@@ -156,8 +157,11 @@ export default function App() {
           onTabChange={(next) => {
             a.setTab(next)
             if (next === 'groups' && a.connected) {
-              if (a.groups.length === 0) void a.loadGroups()
-              else void a.loadLagSummary()
+              a.clearError()
+              if (!a.groupSnapshot) void a.loadGroups()
+              else if (Date.now() - a.groupSnapshot.updatedAt > 30_000) {
+                void a.refreshGroupSnapshot(true)
+              }
             }
             if (next === 'schemas' && a.connected && a.hasRegistry && a.subjects.length === 0) {
               void a.refreshSubjects()
@@ -265,6 +269,7 @@ export default function App() {
                 subjects={a.subjects}
                 hasRegistry={a.hasRegistry}
                 onOpenSubjectInSchemas={a.openSubjectInSchemas}
+                topicLag={a.groupSnapshot?.topics}
               />
             )}
 
@@ -286,6 +291,7 @@ export default function App() {
                 searchHitsOn={a.searchHitsOn}
                 onOpenConsumerGroup={(groupId) => {
                   a.selectGroup(groupId)
+                  setGroupsMode('groups')
                   a.setTab('groups')
                 }}
               />
@@ -333,6 +339,7 @@ export default function App() {
                 busy={a.busy}
                 tailMessages={a.tailMessages}
                 tailBufferCount={a.tailBufferCount}
+                tailDropped={a.tailDropped}
                 selectedTopic={a.selectedTopic}
                 searchClauses={a.searchClauses}
                 searchHitsOn={a.searchHitsOn}
@@ -359,10 +366,20 @@ export default function App() {
                 onMoveGroupOffset={a.moveGroupOffset}
                 onResetGroup={a.resetGroup}
                 groupOffsets={a.groupOffsets}
-                lagSummary={a.lagSummary}
+                groupDetail={a.groupDetail}
+                mode={groupsMode}
+                setMode={setGroupsMode}
+                onDescribeGroup={(groupId) => window.kafdesk.describeConsumerGroup(groupId)}
+                snapshot={a.groupSnapshot}
+                topicConsumers={a.topicConsumers}
+                snapshotLoading={a.snapshotLoading}
                 lagAutoRefresh={a.lagAutoRefresh}
                 setLagAutoRefresh={a.setLagAutoRefresh}
-                onLoadLagSummary={a.loadLagSummary}
+                onRefreshSnapshot={() => void a.refreshGroupSnapshot(false)}
+                onOpenTopicInConsume={(topic) => {
+                  void a.selectTopic(topic)
+                  a.setTab('consume')
+                }}
               />
             )}
             {a.tab === 'schemas' && (

@@ -7,6 +7,7 @@ import { searchHighlightQueries, searchHitsNeedles, type SearchClause } from '..
 import { highlightSearchMatches } from '../lib/searchHighlight'
 import { messageId } from '../lib/messageText'
 import MessageDiffPanel from './MessageDiffPanel'
+import TruncatedValueNotice, { useFullMessage } from './TruncatedValueNotice'
 import type { useLocale } from '../hooks/useLocale'
 
 type Tr = ReturnType<typeof useLocale>['tr']
@@ -68,7 +69,8 @@ export default function MessageInspectorDock({
   const [diffOnlyChanges, setDiffOnlyChanges] = useState(false)
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const index = activeId ? messages.findIndex((m) => messageId(m) === activeId) : -1
-  const active = index >= 0 ? messages[index] : null
+  const full = useFullMessage(index >= 0 ? messages[index] : null)
+  const active = full.shown
   const diffReady = showDiff && diffMessages.length === 2
 
   useEffect(() => {
@@ -295,6 +297,16 @@ export default function MessageInspectorDock({
                 </dl>
               </div>
             )}
+            {active.truncatedBytes ? (
+              <TruncatedValueNotice
+                bytes={active.truncatedBytes}
+                text={tr('msgTruncated')}
+                action={tr('msgLoadFull')}
+                loading={full.loading}
+                error={full.error}
+                onLoad={() => void full.load()}
+              />
+            ) : null}
             <pre className="msg-body msg-dock-json">{bodyHtml}</pre>
           </div>
         ) : (

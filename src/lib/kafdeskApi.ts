@@ -6,11 +6,14 @@ import type {
   ClusterConfig,
   ConnectResult,
   ConsumeRequest,
+  ConsumerGroupDetail,
   ConsumerGroupInfo,
   GroupOffsetEntry,
   KafkaMessageView,
+  GroupSnapshotView,
   LagSummaryResult,
   PingResult,
+  TopicConsumersView,
   ProduceBatchRequest,
   ProduceBatchResult,
   ProduceRequest,
@@ -19,6 +22,7 @@ import type {
   SchemaSubjectInfo,
   SetGroupOffsetsRequest,
   StoredCredentialsInfo,
+  TailBatch,
   TailRequest,
   TopicInfo,
   UpdateSettings,
@@ -33,6 +37,10 @@ export type KafDeskApi = {
   probe: (config: ClusterConfig) => Promise<PingResult>
   listTopics: () => Promise<TopicInfo[]>
   getTopicOffsets: (topic: string) => Promise<TopicInfo>
+  /** Batched watermarks; unknown topics are omitted */
+  topicsOffsets?: (topics: string[]) => Promise<TopicInfo[]>
+  /** One message with its full value (list rows are size-capped) */
+  fetchMessage?: (topic: string, partition: number, offset: string) => Promise<KafkaMessageView>
   consume: (request: ConsumeRequest) => Promise<KafkaMessageView[]>
   produce: (request: ProduceRequest) => Promise<ProduceResult>
   produceBatch: (request: ProduceBatchRequest) => Promise<ProduceBatchResult>
@@ -48,14 +56,19 @@ export type KafDeskApi = {
   getLatestSchema: (subject: string) => Promise<SchemaSubjectInfo>
   listConsumerGroups: () => Promise<ConsumerGroupInfo[]>
   getGroupOffsets: (groupId: string, topic?: string) => Promise<GroupOffsetEntry[]>
-  getLagSummary: (topic?: string) => Promise<LagSummaryResult>
+  describeConsumerGroup: (groupId: string) => Promise<ConsumerGroupDetail>
+  getLagSummary: (topic?: string, groupIds?: string[]) => Promise<LagSummaryResult>
+  /** null = background slot busy — keep the previous snapshot */
+  refreshGroupSnapshot?: () => Promise<GroupSnapshotView | null>
+  /** From the last snapshot only; null before the first refresh */
+  topicConsumers?: (topic: string) => Promise<TopicConsumersView | null>
   setGroupOffsets: (request: SetGroupOffsetsRequest) => Promise<{ ok: boolean }>
   resetGroupOffsets: (groupId: string, topic: string, earliest: boolean) => Promise<{ ok: boolean }>
   tailStart: (request: TailRequest) => Promise<{ ok: boolean }>
   tailStop: () => Promise<{ ok: boolean }>
   /** Hot-swap filters while live tail is running (no consumer restart). */
   tailSetFilter: (request: TailRequest) => Promise<{ ok: boolean }>
-  onTailMessage: (cb: (msg: KafkaMessageView) => void) => () => void
+  onTailBatch: (cb: (batch: TailBatch) => void) => () => void
   onTailError: (cb: (message: string) => void) => () => void
   /** Opt-in Rust breadcrumbs for the Logs tab (default off). */
   setBackendDebug: (enabled: boolean) => Promise<{ ok: boolean }>

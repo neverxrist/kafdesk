@@ -97,6 +97,7 @@ export default function TailPanel({
   busy = false,
   tailMessages,
   tailBufferCount,
+  tailDropped,
   selectedTopic,
   searchClauses = [],
   searchHitsOn = [false, false],
@@ -109,6 +110,7 @@ export default function TailPanel({
   tailMessages: KafkaMessageView[]
   /** Raw buffer size (before display filter). */
   tailBufferCount: number
+  tailDropped: number
   selectedTopic: string | null
   searchClauses?: SearchClause[]
   searchHitsOn?: [boolean, boolean]
@@ -149,6 +151,12 @@ export default function TailPanel({
                   {countLabel ? (
                     <span className="tail-buf-count" title={tr('tailCountTitle')}>
                       {countLabel}
+                      <span className="tail-buf-sep"> · </span>
+                    </span>
+                  ) : null}
+                  {tailDropped > 0 ? (
+                    <span className="tail-buf-count tail-dropped" title={tr('tailDroppedTitle')}>
+                      {tr('tailDropped', { n: tailDropped.toLocaleString() })}
                       <span className="tail-buf-sep"> · </span>
                     </span>
                   ) : null}
@@ -209,6 +217,8 @@ export default function TailPanel({
             expand: tr('expand'),
             collapse: tr('collapse'),
             copyValue: tr('copyValue'),
+            truncated: tr('msgTruncated'),
+            loadFull: tr('msgLoadFull'),
             copied: tr('copied'),
           }}
         />

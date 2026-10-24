@@ -26,7 +26,27 @@ pub fn decode_owned_message(
         format,
         headers: headers_in,
         schema_id,
+        truncated_bytes: None,
     }
+}
+
+/// Per-message value cap for list views (consume window / tail). Bigger payloads
+/// become a text preview; the UI loads the full value on demand.
+pub const MAX_VALUE_BYTES: usize = 256 * 1024;
+
+/// Cut `view.value` to a `MAX_VALUE_BYTES` text preview when the payload exceeds it.
+/// Call after filtering so search still sees the full value.
+pub fn cap_message_value(view: &mut KafkaMessageView, payload_len: usize) {
+    if payload_len <= MAX_VALUE_BYTES {
+        return;
+    }
+    let text = match &view.value {
+        Value::String(s) => truncate_utf8(s, MAX_VALUE_BYTES),
+        other => truncate_utf8(&other.to_string(), MAX_VALUE_BYTES),
+    };
+    view.value = Value::String(text);
+    view.raw_preview = String::new();
+    view.truncated_bytes = Some(payload_len as u64);
 }
 
 pub fn headers_from_message<M: Message>(msg: &M) -> HashMap<String, String> {
@@ -51,7 +71,7 @@ fn decode_payload(payload: Option<&[u8]>) -> (String, Value, String, Option<i32>
         return ("bytes".into(), Value::Null, String::new(), None);
     };
     let schema_id = extract_confluent_schema_id(buf);
-    let format = detect_format(buf, schema_id);
+    let (format, parsed_json) = detect_format(buf, schema_id);
     // Skip duplicating payload into raw_preview when `value` already holds it (RAM / IPC).
     let raw_preview = match format.as_str() {
         "json" | "string" => String::new(),
@@ -72,7 +92,7 @@ fn decode_payload(payload: Option<&[u8]>) -> (String, Value, String, Option<i32>
                     .collect(),
             )
         }
-        "json" => parse_json_loose(std::str::from_utf8(buf).unwrap_or("")),
+        "json" => parsed_json.unwrap_or(Value::Null),
         "string" => Value::String(String::from_utf8_lossy(buf).into_owned()),
         _ => Value::String(if raw_preview.is_empty() {
             to_raw_preview(buf, &format)
@@ -119,22 +139,21 @@ fn extract_confluent_schema_id(buf: &[u8]) -> Option<i32> {
     }
 }
 
-fn detect_format(buf: &[u8], schema_id: Option<i32>) -> String {
+/// Format + the parsed JSON when it is JSON (parsed once, reused as `value`).
+fn detect_format(buf: &[u8], schema_id: Option<i32>) -> (String, Option<Value>) {
     if schema_id.is_some() {
-        return "avro".into();
+        return ("avro".into(), None);
     }
     if let Ok(s) = std::str::from_utf8(buf) {
         let t = s.trim();
         if (t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')) {
-            if serde_json::from_str::<Value>(t).is_ok() {
-                return "json".into();
+            if let Ok(v) = serde_json::from_str::<Value>(t) {
+                return ("json".into(), Some(v));
             }
         }
-        if s.is_ascii() || std::str::from_utf8(buf).is_ok() {
-            return "string".into();
-        }
+        return ("string".into(), None);
     }
-    "bytes".into()
+    ("bytes".into(), None)
 }
 
 fn to_raw_preview(buf: &[u8], format: &str) -> String {
@@ -162,7 +181,11 @@ fn truncate_utf8(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
     }
-    let end = text.floor_char_boundary(max_bytes);
+    // `floor_char_boundary` needs Rust 1.91; MSRV is 1.88.
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
     format!("{}…", &text[..end])
 }
 
@@ -190,6 +213,43 @@ pub fn strip_confluent_wire(buf: &[u8]) -> Option<(i32, &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn view_of(payload: &[u8]) -> KafkaMessageView {
+        decode_owned_message("t", 0, 1, 0, None, Some(payload), HashMap::new())
+    }
+
+    #[test]
+    fn detect_format_json_string_bytes_avro() {
+        let json = view_of(br#" {"a": 1} "#);
+        assert_eq!(json.format, "json");
+        assert_eq!(json.value["a"], 1);
+        assert_eq!(view_of(b"{not json}").format, "string");
+        assert_eq!(view_of(b"hello").format, "string");
+        assert_eq!(view_of(&[0xff, 0xfe, 0x01]).format, "bytes");
+        let avro = view_of(&wrap_confluent_avro(7, b"\x02x"));
+        assert_eq!((avro.format.as_str(), avro.schema_id), ("avro", Some(7)));
+    }
+
+    #[test]
+    fn cap_leaves_small_values_alone() {
+        let mut v = view_of(br#"{"a":1}"#);
+        cap_message_value(&mut v, 7);
+        assert_eq!(v.truncated_bytes, None);
+        assert!(v.value.is_object());
+    }
+
+    #[test]
+    fn cap_turns_big_json_into_text_preview() {
+        let body = format!(r#"{{"blob":"{}"}}"#, "x".repeat(MAX_VALUE_BYTES));
+        let mut v = view_of(body.as_bytes());
+        assert_eq!(v.format, "json");
+        cap_message_value(&mut v, body.len());
+        assert_eq!(v.truncated_bytes, Some(body.len() as u64));
+        let text = v.value.as_str().unwrap();
+        assert!(text.starts_with(r#"{"blob":"xxx"#));
+        assert!(text.len() <= MAX_VALUE_BYTES + '…'.len_utf8());
+        assert_eq!(v.format, "json");
+    }
 
     #[test]
     fn truncate_utf8_mid_multibyte_does_not_panic() {

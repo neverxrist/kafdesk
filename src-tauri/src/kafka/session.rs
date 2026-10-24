@@ -12,8 +12,9 @@ use rdkafka::admin::AdminClient;
 use rdkafka::config::{ClientConfig, FromClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{BaseConsumer, Consumer, StreamConsumer};
 use rdkafka::producer::FutureProducer;
-use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use super::admin_list_offsets::{list_offsets_chunked, OffsetSpec};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -26,7 +27,10 @@ pub(crate) type SConsumer = StreamConsumer<KafdeskCtx>;
 pub struct KafkaSession {
     pub config: Option<ClusterConfig>,
     pub(crate) producer: Option<Producer>,
-    pub(crate) admin: Option<Admin>,
+    /// Long-lived, shared with workers (librdkafka handles are thread-safe).
+    pub(crate) admin: Option<Arc<Admin>>,
+    /// Long-lived metadata / watermark client (no `group.id`), shared with workers.
+    pub(crate) meta: Option<Arc<BConsumer>>,
     pub(crate) brokers: String,
     pub(crate) client_id: String,
     pub(crate) base_config: ClientConfig,
@@ -40,6 +44,10 @@ pub struct KafkaSession {
     /// Live-updated while the tail task runs (search / key / headers / partitions).
     pub(crate) tail_filter: Arc<StdMutex<BrokerMessageFilter>>,
     pub(crate) tail_partitions: Arc<StdMutex<Option<Vec<i32>>>>,
+    /// Last consumer-group snapshot (Groups tab / sidebar lag), shared with workers.
+    pub(crate) group_snapshot: Arc<StdMutex<Option<super::group_snapshot::GroupSnapshot>>>,
+    /// Cleared on disconnect; workers of this connection stop walks and drop results.
+    pub(crate) alive: Arc<AtomicBool>,
 }
 
 impl KafkaSession {
@@ -48,6 +56,7 @@ impl KafkaSession {
             config: None,
             producer: None,
             admin: None,
+            meta: None,
             brokers: String::new(),
             client_id: "kafdesk".into(),
             base_config: ClientConfig::new(),
@@ -59,13 +68,15 @@ impl KafkaSession {
             tail_task: Mutex::new(None),
             tail_filter: Arc::new(StdMutex::new(BrokerMessageFilter::default())),
             tail_partitions: Arc::new(StdMutex::new(None)),
+            group_snapshot: Arc::new(StdMutex::new(None)),
+            alive: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Snapshot for background ops — live session stays in the mutex slot so
     /// topic switch / offsets / disconnect are not blocked by long Kafka calls.
-    /// No fresh Admin/Producer: each librdkafka client burns FDs; workers use
-    /// short-lived metadata/consume clients only.
+    /// Shares the session's Admin + metadata clients (each librdkafka client burns
+    /// FDs and threads); no Producer — produce stays on the live session.
     pub(crate) fn clone_for_worker(&self) -> Result<Self, String> {
         if self.config.is_none() {
             return Err("Not connected to Kafka".into());
@@ -73,7 +84,8 @@ impl KafkaSession {
         Ok(Self {
             config: self.config.clone(),
             producer: None,
-            admin: None,
+            admin: self.admin.clone(),
+            meta: self.meta.clone(),
             brokers: self.brokers.clone(),
             client_id: self.client_id.clone(),
             base_config: self.base_config.clone(),
@@ -85,11 +97,17 @@ impl KafkaSession {
             tail_task: Mutex::new(None),
             tail_filter: Arc::clone(&self.tail_filter),
             tail_partitions: Arc::clone(&self.tail_partitions),
+            group_snapshot: Arc::clone(&self.group_snapshot),
+            alive: Arc::clone(&self.alive),
         })
     }
-    pub(crate) fn make_consumer(&self, group_prefix: &str) -> Result<BConsumer, String> {
-        let mut c = self.base_config.clone();
-        c.set("group.id", format!("{group_prefix}-{}", uuid::Uuid::new_v4()));
+    /// Fresh metadata / watermark client. No `group.id` → no GroupCoordinator connection.
+    /// Prefer `metadata_consumer()`; this is for connect and NotLeader recovery.
+    pub(crate) fn make_consumer(&self) -> Result<BConsumer, String> {
+        Self::new_meta_consumer(&self.base_config)
+    }
+    fn new_meta_consumer(base: &ClientConfig) -> Result<BConsumer, String> {
+        let mut c = base.clone();
         c.set("enable.auto.commit", "false");
         // Prefer fresh leaders — stale metadata → NotLeaderForPartition on watermarks.
         c.set("metadata.max.age.ms", "5000");
@@ -117,15 +135,7 @@ impl KafkaSession {
             .create_with_context(KafdeskCtx::default())
             .map_err(|e| format!("admin: {e}"))?;
 
-        let mut probe_cfg = base.clone();
-        probe_cfg.set(
-            "group.id",
-            format!("kafdesk-probe-{}", uuid::Uuid::new_v4()),
-        );
-        probe_cfg.set("enable.auto.commit", "false");
-        let consumer: BConsumer = probe_cfg
-            .create_with_context(KafdeskCtx::default())
-            .map_err(|e| format!("probe consumer: {e}"))?;
+        let consumer = Self::new_meta_consumer(&base).map_err(|e| format!("probe consumer: {e}"))?;
         consumer
             .fetch_metadata(None, Duration::from_secs(10))
             .map_err(|e| format!("Kafka metadata: {e}"))?;
@@ -161,7 +171,9 @@ impl KafkaSession {
 
         self.config = Some(config);
         self.producer = Some(producer);
-        self.admin = Some(admin);
+        self.admin = Some(Arc::new(admin));
+        self.meta = Some(Arc::new(consumer));
+        self.alive = Arc::new(AtomicBool::new(true));
         self.brokers = brokers;
         self.client_id = client_id;
         self.base_config = base;
@@ -177,15 +189,20 @@ impl KafkaSession {
         })
     }
     pub async fn disconnect(&mut self) {
+        self.alive.store(false, Ordering::Relaxed);
         self.stop_tail().await;
         self.producer = None;
         self.admin = None;
+        self.meta = None;
         self.registry = None;
         self.config = None;
         self.sr_status = "none".into();
         self.sr_error = None;
         if let Ok(mut cache) = self.schema_cache.lock() {
             cache.clear();
+        }
+        if let Ok(mut snap) = self.group_snapshot.lock() {
+            *snap = None;
         }
     }
     pub fn is_connected(&self) -> bool {
@@ -197,7 +214,7 @@ impl KafkaSession {
     pub async fn ping(&self) -> Result<PingResult, String> {
         self.ensure_admin()?;
         let started = Instant::now();
-        let consumer = self.make_consumer("kafdesk-ping")?;
+        let consumer = self.metadata_consumer()?;
         let kafka = match consumer.fetch_metadata(None, Duration::from_secs(8)) {
             Ok(_) => ProbePart {
                 ok: true,
@@ -287,8 +304,14 @@ impl KafkaSession {
         }
         Ok(())
     }
-    pub(crate) fn metadata_consumer(&self) -> Result<BConsumer, String> {
-        self.make_consumer("kafdesk-meta")
+    pub(crate) fn metadata_consumer(&self) -> Result<Arc<BConsumer>, String> {
+        let c = self.meta.clone().ok_or("Not connected to Kafka")?;
+        // Nobody else polls this client: drain queued error events so they don't pile up.
+        while c.poll(Duration::ZERO).is_some() {}
+        Ok(c)
+    }
+    pub(crate) fn shared_admin(&self) -> Result<Arc<Admin>, String> {
+        self.admin.clone().ok_or_else(|| "Not connected to Kafka".into())
     }
     pub fn list_topics(&self) -> Result<Vec<TopicInfo>, String> {
         let consumer = self.metadata_consumer()?;
@@ -299,32 +322,67 @@ impl KafkaSession {
             .topics()
             .iter()
             .filter(|t| !t.name().starts_with("__"))
-            .map(|t| TopicInfo {
-                name: t.name().to_string(),
-                partitions: {
-                    let mut parts: Vec<_> = t
-                        .partitions()
-                        .iter()
-                        .map(|p| PartitionInfo {
-                            partition_id: p.id(),
-                            leader: p.leader(),
-                            replicas: p.replicas().to_vec(),
-                            isr: p.isr().to_vec(),
-                            offset_low: None,
-                            offset_high: None,
-                            approx_messages: None,
-                        })
-                        .collect();
-                    parts.sort_by_key(|p| p.partition_id);
-                    parts
-                },
-                approx_messages: None,
-            })
+            .map(topic_info_from_meta)
             .collect();
         topics.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(topics)
     }
+    /// Watermarks for many topics at once: one metadata request + batched
+    /// `ListOffsets(EARLIEST)` / `ListOffsets(LATEST)`. Unknown topics are skipped;
+    /// partitions whose offsets failed keep `None` watermarks.
+    pub fn topics_with_offsets(&self, names: &[String]) -> Result<Vec<TopicInfo>, String> {
+        if names.is_empty() {
+            return Ok(vec![]);
+        }
+        let consumer = self.metadata_consumer()?;
+        let admin = self.shared_admin()?;
+        let meta = if names.len() == 1 {
+            consumer.fetch_metadata(Some(&names[0]), Duration::from_secs(5))
+        } else {
+            consumer.fetch_metadata(None, Duration::from_secs(15))
+        }
+        .map_err(|e| e.to_string())?;
+        let wanted: HashSet<&str> = names.iter().map(String::as_str).collect();
+        let mut topics: Vec<TopicInfo> = meta
+            .topics()
+            .iter()
+            .filter(|t| t.error().is_none() && wanted.contains(t.name()))
+            .map(topic_info_from_meta)
+            .collect();
+        let tps: Vec<(String, i32)> = topics
+            .iter()
+            .flat_map(|t| t.partitions.iter().map(|p| (t.name.clone(), p.partition_id)))
+            .collect();
+        let lows = list_offsets_chunked(&admin, &tps, OffsetSpec::Earliest, LIST_OFFSETS_TIMEOUT);
+        let highs = list_offsets_chunked(&admin, &tps, OffsetSpec::Latest, LIST_OFFSETS_TIMEOUT);
+        for t in &mut topics {
+            let mut total = 0i64;
+            for p in &mut t.partitions {
+                let key = (t.name.clone(), p.partition_id);
+                if let (Some(&low), Some(&high)) = (lows.get(&key), highs.get(&key)) {
+                    let approx = (high - low).max(0);
+                    total += approx;
+                    p.offset_low = Some(low.to_string());
+                    p.offset_high = Some(high.to_string());
+                    p.approx_messages = Some(approx);
+                }
+            }
+            t.approx_messages = Some(total);
+        }
+        topics.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(topics)
+    }
     pub fn get_topic_offsets(&self, topic: &str) -> Result<TopicInfo, String> {
+        if let Ok(mut v) = self.topics_with_offsets(&[topic.to_string()]) {
+            if v.len() == 1 && v[0].partitions.iter().all(|p| p.offset_high.is_some()) {
+                return Ok(v.remove(0));
+            }
+        }
+        self.get_topic_offsets_watermarks(topic)
+    }
+    /// Per-partition `fetch_watermarks` with NotLeader retry — fallback when
+    /// batched ListOffsets is unavailable (old brokers / ACL quirks).
+    pub(super) fn get_topic_offsets_watermarks(&self, topic: &str) -> Result<TopicInfo, String> {
         let mut consumer = self.metadata_consumer()?;
         // No hard DNS ensure here — enrich calls this for every topic and must stay fast.
         // Consume still runs ensure_advertised_brokers_resolvable.
@@ -389,8 +447,8 @@ impl KafkaSession {
                             break;
                         }
                         if !recreated {
-                            if let Ok(c) = self.metadata_consumer() {
-                                consumer = c;
+                            if let Ok(c) = self.make_consumer() {
+                                consumer = Arc::new(c);
                                 recreated = true;
                             }
                         }
@@ -545,5 +603,29 @@ impl KafkaSession {
             .as_ref()
             .ok_or("Schema Registry is not configured")?;
         reg.get_latest_schema(subject).await
+    }
+}
+
+const LIST_OFFSETS_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn topic_info_from_meta(t: &rdkafka::metadata::MetadataTopic) -> TopicInfo {
+    let mut partitions: Vec<_> = t
+        .partitions()
+        .iter()
+        .map(|p| PartitionInfo {
+            partition_id: p.id(),
+            leader: p.leader(),
+            replicas: p.replicas().to_vec(),
+            isr: p.isr().to_vec(),
+            offset_low: None,
+            offset_high: None,
+            approx_messages: None,
+        })
+        .collect();
+    partitions.sort_by_key(|p| p.partition_id);
+    TopicInfo {
+        name: t.name().to_string(),
+        partitions,
+        approx_messages: None,
     }
 }

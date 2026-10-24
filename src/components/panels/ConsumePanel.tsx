@@ -638,6 +638,8 @@ export default function ConsumePanel({
           expand: tr('expand'),
           collapse: tr('collapse'),
           copyValue: tr('copyValue'),
+          truncated: tr('msgTruncated'),
+          loadFull: tr('msgLoadFull'),
           copied: tr('copied'),
           headers: tr('msgHeaders'),
           inspect: tr('msgDockOpen'),
