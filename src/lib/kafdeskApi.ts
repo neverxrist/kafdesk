@@ -93,5 +93,15 @@ export type KafDeskApi = {
   openDownloadedUpdate: () => Promise<void>
   openReleases: () => Promise<void>
   getVersion: () => Promise<string>
+  webFaceStatus: () => Promise<WebFaceStatus>
+  /** Desktop local settings (`kafdesk.*`) for the browser face. */
+  webFacePutClientState: (raw: string) => Promise<void>
+  webFaceSetOwner: (owner: 'desktop' | 'web', openBrowser: boolean) => Promise<WebFaceStatus>
   onUpdateStatus: (cb: (s: UpdateStatus) => void) => () => void
+}
+
+export type WebFaceStatus = {
+  running: boolean
+  url: string | null
+  owner: 'desktop' | 'web'
 }

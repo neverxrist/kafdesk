@@ -49,6 +49,7 @@ import {
 } from '../lib/messageText'
 import { filterMessages } from '../lib/messageFilter'
 import { wireSearch, type SearchScope } from '../lib/searchScope'
+import { isFaceLockedError, thisSideHasControl } from '../lib/faceControl'
 import { stripIpcError } from '../lib/ipcError'
 import {
   brokersFromHostPort,
@@ -270,10 +271,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       setError(t(localStorage.getItem(LOCALE_KEY) === 'en' ? 'en' : 'ru', 'preloadMissing'))
       return
     }
-    window.kafdesk.status().then((s) => {
-      setConnected(s.connected)
-      setSrStatus(s.schemaRegistry)
-    })
+    void syncLiveSession()
     void window.kafdesk.authSession().then(setAuthSession)
     void window.kafdesk.updateSettings?.().then((s) => setUpdateAuto(s.autoUpdate))
     void refreshStoredCreds()
@@ -317,6 +315,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   useEffect(() => {
     if (tab !== 'groups' || !connected || !lagAutoRefresh) return
     const id = setInterval(() => {
+      if (!thisSideHasControl()) return
       void refreshGroupSnapshot(true)
     }, 30_000)
     return () => clearInterval(id)
@@ -677,6 +676,28 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     }
   }
 
+  async function syncLiveSession() {
+    if (!window.kafdesk || !thisSideHasControl()) return
+    try {
+      const s = await window.kafdesk.status()
+      setConnected(s.connected)
+      setSrStatus(s.schemaRegistry)
+      if (!s.connected) return
+      const list = await window.kafdesk.listTopics()
+      setTopics(list)
+      void enrichTopicApprox(list)
+      if (s.schemaRegistry === 'ok') {
+        try {
+          setSubjects((await window.kafdesk.listSubjects()).sort())
+        } catch {
+          setSubjects([])
+        }
+      }
+    } catch (err) {
+      if (isFaceLockedError(err)) return
+    }
+  }
+
   async function connectWith(target: ClusterConfig) {
     setBusy(true)
     setError(null)
@@ -774,11 +795,13 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function connect() {
+    if (!thisSideHasControl()) return
     if (!config) return
     await connectWith(draftConfig())
   }
 
   async function reconnect() {
+    if (!thisSideHasControl()) return
     if (!config) return
     const keepTopic = selectedTopic
     setBusy(true)
@@ -870,6 +893,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function disconnect() {
+    if (!thisSideHasControl()) return
     enrichGenRef.current += 1
     setBusy(true)
     try {
@@ -982,7 +1006,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
       const BATCH = 500
       let batchFailed = false
       for (let i = 0; i < list.length; i += BATCH) {
-        if (enrichGenRef.current !== gen) return
+        if (!thisSideHasControl() || enrichGenRef.current !== gen) return
         try {
           const rows = await window.kafdesk.topicsOffsets(list.slice(i, i + BATCH).map((t) => t.name))
           if (enrichGenRef.current !== gen) return
@@ -999,7 +1023,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
     async function worker() {
       while (cursor < list.length) {
-        if (enrichGenRef.current !== gen) return
+        if (!thisSideHasControl() || enrichGenRef.current !== gen) return
         const idx = cursor++
         const t = list[idx]
         try {
@@ -1341,7 +1365,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   ) {
     // Guard: never treat a click event (or other non-string) as a topic name
     const topic = (typeof topicName === 'string' && topicName) || selectedTopic
-    if (!topic) return
+    if (!topic || !thisSideHasControl()) return
     // Prefer consume over background topic-size enrich (they share one Kafka session).
     enrichGenRef.current += 1
     cancelScheduledConsumeReload()
@@ -1442,6 +1466,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   /** Cluster-wide snapshot: list + committed offsets + end offsets in one pass. */
   async function refreshGroupSnapshot(silent = false) {
+    if (!thisSideHasControl()) return
     if (!window.kafdesk?.refreshGroupSnapshot) return
     if (snapshotLoadingRef.current) return
     snapshotLoadingRef.current = true
@@ -1609,6 +1634,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function startTail() {
+    if (!thisSideHasControl()) return
     if (!selectedTopic) return
     setBusy(true)
     setError(null)
@@ -1703,6 +1729,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function sendMessage() {
+    if (!thisSideHasControl()) return
     if (!selectedTopic) return
     if (produceFormat === 'avro-local' && !localSchema) {
       setError('Load a .avsc file first')
@@ -1740,6 +1767,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
   }
 
   async function sendBulk(count: number) {
+    if (!thisSideHasControl()) return
     if (!selectedTopic) return
     if (produceFormat === 'avro-local' && !localSchema) {
       setError('Load a .avsc file first')
@@ -1785,6 +1813,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
 
   return {
     config,
+    syncLiveSession,
     sidebarOpen,
     setSidebarOpen,
     connections,

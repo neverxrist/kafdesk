@@ -2872,6 +2872,84 @@ button.linkish:hover {
   border-top: 1px solid var(--border);
 }
 
+.face-lock-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 0.45rem 0.85rem;
+  border-radius: 0;
+  background: #3a2a10;
+  color: #ffe3a3;
+  border-bottom: 1px solid var(--warn);
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+[data-theme='light'] .face-lock-banner {
+  background: #fff4d6;
+  color: #6a4b00;
+}
+
+.app.face-locked .sidebar {
+  padding-top: 3.3rem;
+}
+
+.app.face-locked .main {
+  padding-top: 2.15rem;
+}
+
+.sidebar-lock-note {
+  margin: 0.35rem 0 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: #3a2a10;
+  color: #ffe3a3;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+[data-theme='light'] .sidebar-lock-note {
+  background: #fff4d6;
+  color: #6a4b00;
+}
+
+.app.face-locked .sidebar,
+.app.face-locked .sidebar-backdrop,
+.app.face-locked .topbar-tabs,
+.app.face-locked .topbar-conn-wrap,
+.app.face-locked .topbar-conn-btns,
+.app.face-locked .toolbar,
+.app.face-locked .content,
+.app.face-locked .logs-pane {
+  pointer-events: none;
+}
+
+.settings-url {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.settings-url span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.settings-url input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.78rem;
+}
+
 .settings-pane {
   padding: 1.1rem 1.25rem;
   display: flex;

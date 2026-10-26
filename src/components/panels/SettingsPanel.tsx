@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { WebFaceStatus } from '../../lib/kafdeskApi'
 import type { UpdateStatus } from '../../types/kafdesk'
 import type { useLocale } from '../../hooks/useLocale'
 
@@ -42,6 +43,8 @@ export default function SettingsPanel({
   onSetAutoUpdate,
   onCheckUpdates,
   onOpenReleases,
+  face,
+  onSwitchFace,
 }: {
   tr: Tr
   updateStatus: UpdateStatus
@@ -49,15 +52,65 @@ export default function SettingsPanel({
   onSetAutoUpdate: (v: boolean) => void
   onCheckUpdates: () => void
   onOpenReleases: () => void
+  face: WebFaceStatus
+  onSwitchFace: (owner: 'desktop' | 'web') => Promise<void>
 }) {
   const [appVersion, setAppVersion] = useState<string>('')
+  const [switching, setSwitching] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [faceError, setFaceError] = useState<string | null>(null)
 
   useEffect(() => {
     void window.kafdesk.getVersion?.().then(setAppVersion).catch(() => setAppVersion(''))
   }, [])
 
+  const toWeb = face.owner !== 'web'
+
   return (
     <div className="settings-pane">
+      <section className="panel settings-block">
+        <h2>{tr('faceTitle')}</h2>
+        <p className="settings-hint" style={{ marginTop: 0 }}>
+          {tr('faceHint')}
+        </p>
+        <div className="settings-actions">
+          <button
+            type="button"
+            disabled={switching}
+            onClick={() => {
+              setSwitching(true)
+              setFaceError(null)
+              void onSwitchFace(toWeb ? 'web' : 'desktop')
+                .catch((err: unknown) => {
+                  setFaceError(err instanceof Error ? err.message : String(err))
+                })
+                .finally(() => setSwitching(false))
+            }}
+          >
+            {toWeb ? tr('faceToWeb') : tr('faceToDesktop')}
+          </button>
+        </div>
+        {face.url ? (
+          <label className="settings-url">
+            <span>{tr('faceUrl')}</span>
+            <input readOnly value={face.url} onFocus={(e) => e.currentTarget.select()} />
+            <button
+              type="button"
+              onClick={() => {
+                const write = navigator.clipboard?.writeText(face.url || '')
+                if (!write) return
+                void write.then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1500)
+                })
+              }}
+            >
+              {copied ? tr('faceCopied') : tr('faceCopy')}
+            </button>
+          </label>
+        ) : null}
+        {faceError ? <p className="settings-hint">{faceError}</p> : null}
+      </section>
       <section className="panel settings-block">
         <h2>{tr('updates')}</h2>
         {appVersion ? (

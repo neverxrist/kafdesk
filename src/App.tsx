@@ -15,6 +15,14 @@ import SettingsPanel from './components/panels/SettingsPanel'
 import { useAppLogs } from './hooks/useAppLogs'
 import { useKafdeskApp } from './hooks/useKafdeskApp'
 import { useLocale } from './hooks/useLocale'
+import {
+  collectKafdeskStorage,
+  getFaceOwner,
+  isFaceBrowser,
+  setFaceOwner,
+  thisSideHasControl,
+} from './lib/faceControl'
+import type { WebFaceStatus } from './lib/kafdeskApi'
 import { useGlass } from './hooks/useGlass'
 import { useTheme } from './hooks/useTheme'
 import { detectUpdateOs } from './lib/updateOs'
@@ -47,6 +55,52 @@ export default function App() {
   const [activeSetId, setActiveSetId] = useState<string | null>(null)
   const [traceOpen, setTraceOpen] = useState(false)
   const [traceNeedle, setTraceNeedle] = useState('')
+  const [face, setFace] = useState<WebFaceStatus>(() => ({
+    running: isFaceBrowser(),
+    url: null,
+    owner: getFaceOwner(),
+  }))
+
+  const faceGen = useRef(0)
+
+  useEffect(() => {
+    let alive = true
+    const tick = () => {
+      const gen = faceGen.current
+      void window.kafdesk
+        ?.webFaceStatus?.()
+        .then((s) => {
+          if (!alive || faceGen.current !== gen) return
+          setFace(s)
+          setFaceOwner(s.owner)
+        })
+        .catch(() => {})
+    }
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => {
+      alive = false
+      window.clearInterval(id)
+    }
+  }, [])
+
+  const hadControl = useRef(thisSideHasControl())
+  useEffect(() => {
+    const has = thisSideHasControl()
+    if (has && !hadControl.current) void a.syncLiveSession()
+    hadControl.current = has
+  }, [face.owner]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function switchFace(owner: 'desktop' | 'web') {
+    const gen = ++faceGen.current
+    if (owner === 'web' && !isFaceBrowser()) {
+      await window.kafdesk.webFacePutClientState(JSON.stringify(collectKafdeskStorage()))
+    }
+    const next = await window.kafdesk.webFaceSetOwner(owner, owner === 'web' && !isFaceBrowser())
+    if (faceGen.current !== gen) return
+    setFace(next)
+    setFaceOwner(next.owner)
+  }
 
   useEffect(() => {
     setTopicSets(loadTopicSets(a.activeId))
@@ -95,8 +149,15 @@ export default function App() {
         ? 'updateReadyDetailWin'
         : 'updateReadyDetailLinux'
 
+  const hasControl = isFaceBrowser() ? face.owner === 'web' : face.owner === 'desktop'
+
   return (
-    <div className={`app ${a.sidebarOpen ? 'drawer-open' : ''}`}>
+    <div className={`app ${a.sidebarOpen ? 'drawer-open' : ''} ${hasControl ? '' : 'face-locked'}`}>
+      {!hasControl && (
+        <div className="face-lock-banner" role="status">
+          {isFaceBrowser() ? tr('faceLockedDesktop') : tr('faceLockedWeb')}
+        </div>
+      )}
       {a.error && (
         <ErrorModal
           title={tr('connectErrorTitle')}
@@ -153,6 +214,7 @@ export default function App() {
         onReconnect={a.reconnect}
         onDisconnect={a.disconnect}
         onPing={a.ping}
+        lockNote={hasControl ? undefined : isFaceBrowser() ? tr('faceLockedDesktop') : tr('faceLockedWeb')}
       />
 
       <main className="main">
@@ -322,6 +384,8 @@ export default function App() {
             onSetAutoUpdate={a.setAutoUpdateEnabled}
             onCheckUpdates={a.checkForUpdates}
             onOpenReleases={() => void a.openReleases()}
+            face={face}
+            onSwitchFace={switchFace}
           />
         ) : (
           <div

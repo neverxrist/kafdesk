@@ -8,6 +8,7 @@ mod tls_resolve;
 mod sr;
 mod types;
 mod updates;
+mod web_face;
 mod webview_memory;
 
 use commands::AppState;
@@ -82,6 +83,9 @@ pub fn run() {
             commands::app_open_downloaded_update,
             commands::app_open_releases,
             commands::app_get_version,
+            web_face::web_face_status,
+            web_face::web_face_put_client_state,
+            web_face::web_face_set_owner,
         ])
         .build(tauri::generate_context!())
         .expect("error while building KafDesk")

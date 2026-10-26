@@ -101,6 +101,7 @@ export default function ConnectionDrawer({
   onReconnect,
   onDisconnect,
   onPing,
+  lockNote,
 }: {
   tr: Tr
   sidebarOpen: boolean
@@ -134,6 +135,7 @@ export default function ConnectionDrawer({
   onReconnect: () => void
   onDisconnect: () => void
   onPing: () => void
+  lockNote?: string
 }) {
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
@@ -357,6 +359,8 @@ export default function ConnectionDrawer({
             ⟨
           </button>
         </div>
+
+        {lockNote ? <p className="sidebar-lock-note">{lockNote}</p> : null}
 
         <div className="conn-list-head">
           <h2>{tr('saved')}</h2>
