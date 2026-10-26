@@ -47,6 +47,7 @@ export default function MessageInspectorDock({
   onSelect,
   onClose,
   onRepublish,
+  onTraceKey,
   searchClauses = [],
   searchHitsOn = [false, false],
 }: {
@@ -61,6 +62,7 @@ export default function MessageInspectorDock({
   onSelect: (id: string) => void
   onClose: () => void
   onRepublish?: (m: KafkaMessageView) => void
+  onTraceKey?: (key: string) => void
   searchClauses?: SearchClause[]
   /** Per-row Hits toggles (same order as searchClauses). */
   searchHitsOn?: [boolean, boolean]
@@ -208,6 +210,11 @@ export default function MessageInspectorDock({
                 ›
               </button>
             </>
+          )}
+          {active?.key && onTraceKey && !diffReady && (
+            <button type="button" className="msg-dock-action" onClick={() => onTraceKey(active.key!)}>
+              {tr('traceThisKey')}
+            </button>
           )}
           {active && onRepublish && !diffReady && (
             <button type="button" className="msg-dock-action" onClick={() => onRepublish(active)}>

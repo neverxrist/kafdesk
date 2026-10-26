@@ -14,7 +14,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer, StreamConsumer};
 use rdkafka::producer::FutureProducer;
 use super::admin_list_offsets::{list_offsets_chunked, OffsetSpec};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -48,6 +48,8 @@ pub struct KafkaSession {
     pub(crate) group_snapshot: Arc<StdMutex<Option<super::group_snapshot::GroupSnapshot>>>,
     /// Cleared on disconnect; workers of this connection stop walks and drop results.
     pub(crate) alive: Arc<AtomicBool>,
+    /// Bumped on a new trace, cancel, and disconnect. In-flight traces stop when it moves.
+    pub(crate) trace_gen: Arc<AtomicU64>,
 }
 
 impl KafkaSession {
@@ -70,6 +72,7 @@ impl KafkaSession {
             tail_partitions: Arc::new(StdMutex::new(None)),
             group_snapshot: Arc::new(StdMutex::new(None)),
             alive: Arc::new(AtomicBool::new(false)),
+            trace_gen: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -99,6 +102,7 @@ impl KafkaSession {
             tail_partitions: Arc::clone(&self.tail_partitions),
             group_snapshot: Arc::clone(&self.group_snapshot),
             alive: Arc::clone(&self.alive),
+            trace_gen: Arc::clone(&self.trace_gen),
         })
     }
     /// Fresh metadata / watermark client. No `group.id` → no GroupCoordinator connection.
@@ -174,6 +178,7 @@ impl KafkaSession {
         self.admin = Some(Arc::new(admin));
         self.meta = Some(Arc::new(consumer));
         self.alive = Arc::new(AtomicBool::new(true));
+        self.trace_gen = Arc::new(AtomicU64::new(1));
         self.brokers = brokers;
         self.client_id = client_id;
         self.base_config = base;
@@ -190,6 +195,7 @@ impl KafkaSession {
     }
     pub async fn disconnect(&mut self) {
         self.alive.store(false, Ordering::Relaxed);
+        self.trace_gen.fetch_add(1, Ordering::Relaxed);
         self.stop_tail().await;
         self.producer = None;
         self.admin = None;

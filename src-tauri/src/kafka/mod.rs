@@ -13,5 +13,6 @@ mod session;
 #[cfg(test)]
 mod smoke_tests;
 mod tail;
+pub(crate) mod trace;
 
 pub use session::KafkaSession;

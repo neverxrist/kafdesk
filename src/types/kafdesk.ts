@@ -300,6 +300,49 @@ export interface TailBatch {
   dropped: number
 }
 
+export interface TraceRequest {
+  needle: string
+  topics: string[]
+  fromMs: number
+  scanValues: boolean
+}
+
+export interface TraceHit {
+  topic: string
+  partition: number
+  offset: string
+  timestamp: string
+  key: string | null
+  matched: 'key' | 'value' | string
+  preview: string
+  fields: string[]
+}
+
+export interface TraceTopicStat {
+  topic: string
+  scanned: number
+  hits: number
+  capped: boolean
+  keyPartition: number
+  partitions: number
+  error?: string
+}
+
+export interface TraceResult {
+  hits: TraceHit[]
+  topics: TraceTopicStat[]
+  partial: boolean
+  cancelled: boolean
+  durationMs: number
+}
+
+export interface TraceProgress {
+  topic: string
+  done: number
+  total: number
+  hits: number
+}
+
 export interface TailRequest {
   topic: string
   partitions?: number[]

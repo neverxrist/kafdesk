@@ -24,6 +24,9 @@ import type {
   StoredCredentialsInfo,
   TailBatch,
   TailRequest,
+  TraceProgress,
+  TraceRequest,
+  TraceResult,
   TopicInfo,
   UpdateSettings,
   UpdateStatus,
@@ -70,6 +73,9 @@ export type KafDeskApi = {
   tailSetFilter: (request: TailRequest) => Promise<{ ok: boolean }>
   onTailBatch: (cb: (batch: TailBatch) => void) => () => void
   onTailError: (cb: (message: string) => void) => () => void
+  traceKey?: (request: TraceRequest) => Promise<TraceResult>
+  traceCancel?: () => Promise<void>
+  onTraceProgress?: (cb: (progress: TraceProgress) => void) => () => void
   /** Opt-in Rust breadcrumbs for the Logs tab (default off). */
   setBackendDebug: (enabled: boolean) => Promise<{ ok: boolean }>
   getBackendDebug: () => Promise<boolean>

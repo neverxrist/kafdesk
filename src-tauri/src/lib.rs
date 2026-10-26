@@ -48,6 +48,8 @@ pub fn run() {
             commands::kafka_get_topic_offsets,
             commands::kafka_topics_offsets,
             commands::kafka_fetch_message,
+            commands::kafka_trace_key,
+            commands::kafka_trace_cancel,
             commands::kafka_consume,
             commands::kafka_produce,
             commands::kafka_produce_batch,

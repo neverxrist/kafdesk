@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import EmptyState from './EmptyState'
 import TopicSchemaPanel from './TopicSchemaPanel'
 import type { TopicInfo, TopicLagRow } from '../types/kafdesk'
+import type { TopicSet } from '../lib/topicSets'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
 import {
@@ -20,6 +21,7 @@ import {
 type Tr = ReturnType<typeof useLocale>['tr']
 
 type CtxMenu = { topic: string; x: number; y: number }
+type SetPicker = { topic: string; x: number; y: number }
 type SchemaPopover = { topic: string; x: number; y: number }
 
 function clampPopoverPos(x: number, y: number, w: number, h: number) {
@@ -47,6 +49,12 @@ export default function TopicsSidebar({
   onOpenSubjectInSchemas,
   topicLag,
   showLagFilter = true,
+  topicSets = [],
+  activeSetId = null,
+  onActiveSetId,
+  onCreateSet,
+  onAddTopicToSet,
+  onOpenTrace,
 }: {
   tr: Tr
   connected: boolean
@@ -64,6 +72,12 @@ export default function TopicsSidebar({
   topicLag?: TopicLagRow[]
   /** Consume, Tail, Groups. Produce picks a write target — lag filter does not belong there. */
   showLagFilter?: boolean
+  topicSets?: TopicSet[]
+  activeSetId?: string | null
+  onActiveSetId?: (id: string | null) => void
+  onCreateSet?: (name: string, topic: string) => void
+  onAddTopicToSet?: (setId: string, topic: string) => void
+  onOpenTrace?: () => void
 }) {
   const [onlyWithLag, setOnlyWithLag] = useState(false)
   const lagByTopic = useMemo(() => {
@@ -82,8 +96,11 @@ export default function TopicsSidebar({
   const [activeFilterIds, setActiveFilterIds] = useState<string[]>([])
   const [onlyPinned, setOnlyPinned] = useState(() => loadOnlyPinnedTopics())
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
+  const [setPicker, setSetPicker] = useState<SetPicker | null>(null)
+  const [newSetName, setNewSetName] = useState('')
   const [schemaPopover, setSchemaPopover] = useState<SchemaPopover | null>(null)
   const ctxMenuRef = useRef<HTMLDivElement | null>(null)
+  const setPickerRef = useRef<HTMLDivElement | null>(null)
   const schemaPopoverRef = useRef<HTMLDivElement | null>(null)
 
   function setTopicsPanelOpen(open: boolean) {
@@ -126,19 +143,22 @@ export default function TopicsSidebar({
   }
 
   useEffect(() => {
-    if (!ctxMenu && !schemaPopover) return
+    if (!ctxMenu && !schemaPopover && !setPicker) return
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         setCtxMenu(null)
         setSchemaPopover(null)
+        setSetPicker(null)
       }
     }
     function onPointerDown(e: PointerEvent) {
       const t = e.target as Node
       if (ctxMenuRef.current?.contains(t)) return
       if (schemaPopoverRef.current?.contains(t)) return
+      if (setPickerRef.current?.contains(t)) return
       setCtxMenu(null)
       setSchemaPopover(null)
+      setSetPicker(null)
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('pointerdown', onPointerDown)
@@ -146,7 +166,7 @@ export default function TopicsSidebar({
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('pointerdown', onPointerDown)
     }
-  }, [ctxMenu, schemaPopover])
+  }, [ctxMenu, schemaPopover, setPicker])
 
   function onTopicContextMenu(e: ReactMouseEvent, topic: string) {
     e.preventDefault()
@@ -164,6 +184,19 @@ export default function TopicsSidebar({
     setCtxMenu(null)
   }
 
+  function openSetPicker() {
+    if (!ctxMenu || !onCreateSet) return
+    const pos = clampPopoverPos(ctxMenu.x, ctxMenu.y, 240, 280)
+    setSetPicker({ topic: ctxMenu.topic, ...pos })
+    setNewSetName('')
+    setCtxMenu(null)
+  }
+
+  const activeSet = topicSets.find((s) => s.id === activeSetId) ?? null
+  const activeSetNames = activeSet ? new Set(activeSet.topics) : null
+  const missingSetTopics = activeSet
+    ? activeSet.topics.filter((name) => !topics.some((t) => t.name === name))
+    : []
   const chipQueries = savedFilters
     .filter((f) => activeFilterIds.includes(f.id))
     .map((f) => f.query.trim().toLowerCase())
@@ -175,7 +208,8 @@ export default function TopicsSidebar({
     const typedOk = !typedQuery || name.includes(typedQuery)
     const lagOk =
       !showLagFilter || !onlyWithLag || !hasTopicLag || (lagByTopic.get(t.name)?.totalLag ?? 0) > 0
-    return chipOk && typedOk && lagOk
+    const setOk = !activeSetNames || activeSetNames.has(t.name)
+    return chipOk && typedOk && lagOk && setOk
   })
 
   const pinnedSet = new Set(pinnedTopics)
@@ -342,6 +376,38 @@ export default function TopicsSidebar({
           </label>
         )}
       </div>
+      {topicSets.length > 0 && onActiveSetId && (
+        <div className="topic-set-row">
+          <select
+            value={activeSetId ?? ''}
+            aria-label={tr('topicSetIn')}
+            disabled={!connected}
+            onChange={(e) => onActiveSetId(e.target.value || null)}
+          >
+            <option value="">{tr('topicSetAll')}</option>
+            {topicSets.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.topics.length})
+              </option>
+            ))}
+          </select>
+          {onOpenTrace && (
+            <button
+              type="button"
+              className="topic-set-trace"
+              disabled={!connected || !activeSetId}
+              onClick={onOpenTrace}
+            >
+              {tr('topicSetTrace')}
+            </button>
+          )}
+        </div>
+      )}
+      {missingSetTopics.length > 0 && (
+        <p className="topic-set-missing">
+          {missingSetTopics.join(', ')} · {tr('topicSetMissing')}
+        </p>
+      )}
       <div className="topic-filter-row">
         <input
           value={topicQuery}
@@ -500,6 +566,61 @@ export default function TopicsSidebar({
           >
             {tr('topicSchema')}
           </button>
+          {onCreateSet && (
+            <button type="button" role="menuitem" className="topic-ctx-item" onClick={openSetPicker}>
+              {tr('topicSetAdd')}
+            </button>
+          )}
+        </div>
+      )}
+
+      {setPicker && (
+        <div
+          ref={setPickerRef}
+          className="topic-ctx-menu topic-set-picker"
+          style={{ left: setPicker.x, top: setPicker.y }}
+          role="dialog"
+          aria-label={tr('topicSetAdd')}
+        >
+          {topicSets.map((s) => {
+            const has = s.topics.includes(setPicker.topic)
+            return (
+              <button
+                key={s.id}
+                type="button"
+                className="topic-ctx-item"
+                disabled={has || !onAddTopicToSet}
+                onClick={() => {
+                  onAddTopicToSet?.(s.id, setPicker.topic)
+                  onActiveSetId?.(s.id)
+                  setSetPicker(null)
+                }}
+              >
+                {s.name}
+                {has ? ' ·' : ''}
+              </button>
+            )
+          })}
+          <form
+            className="topic-set-new"
+            onSubmit={(e) => {
+              e.preventDefault()
+              const name = newSetName.trim()
+              if (!name || !onCreateSet) return
+              onCreateSet(name, setPicker.topic)
+              setSetPicker(null)
+            }}
+          >
+            <input
+              value={newSetName}
+              placeholder={tr('topicSetName')}
+              onChange={(e) => setNewSetName(e.target.value)}
+              autoFocus
+            />
+            <button type="submit" disabled={!newSetName.trim()}>
+              {tr('topicSetNew')}
+            </button>
+          </form>
         </div>
       )}
 

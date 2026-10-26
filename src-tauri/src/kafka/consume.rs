@@ -16,6 +16,43 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+struct HeldRaw {
+    topic: String,
+    partition: i32,
+    offset: i64,
+    timestamp: i64,
+    key: Option<Vec<u8>>,
+    payload: Option<Vec<u8>>,
+    headers: std::collections::HashMap<String, String>,
+    payload_len: usize,
+}
+
+fn sort_held(rows: &mut [HeldRaw], newest_first: bool) {
+    rows.sort_by(|a, b| {
+        let ord = if newest_first {
+            b.timestamp.cmp(&a.timestamp)
+        } else {
+            a.timestamp.cmp(&b.timestamp)
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+        let pord = if newest_first {
+            b.partition.cmp(&a.partition)
+        } else {
+            a.partition.cmp(&b.partition)
+        };
+        if pord != std::cmp::Ordering::Equal {
+            return pord;
+        }
+        if newest_first {
+            b.offset.cmp(&a.offset)
+        } else {
+            a.offset.cmp(&b.offset)
+        }
+    });
+}
+
 impl KafkaSession {
     /// Stable per-user id: librdkafka's assign() requires `group.id` (else `Unknown group`).
     /// Nothing is committed and no JoinGroup is sent, so no group appears on the cluster.
@@ -30,7 +67,7 @@ impl KafkaSession {
     }
 
     /// Shared librdkafka knobs for assign()-only browse (no commit / minimal coordinator).
-    fn consume_client_config(&self) -> ClientConfig {
+    pub(super) fn consume_client_config(&self) -> ClientConfig {
         let mut cfg = self.base_config.clone();
         cfg.set("group.id", self.consume_group_id());
         cfg.set("session.timeout.ms", "6000");
@@ -242,6 +279,9 @@ impl KafkaSession {
         let high_by: HashMap<i32, i64> = topic_offsets.iter().map(|o| (o.partition, o.high)).collect();
         let mut finished_partitions = finished;
         let mut messages = Vec::new();
+        // Unfiltered windows only show `limit` rows. Keep the raw tail and decode that slice,
+        // instead of Avro/JSON-decoding every partition's lookback first.
+        let mut held: Vec<HeldRaw> = Vec::new();
         let mut taken_by_part: HashMap<i32, i32> = HashMap::new();
         let deadline = Instant::now() + Duration::from_millis(plan.wait_ms);
         let mut last_msg = Instant::now();
@@ -254,7 +294,7 @@ impl KafkaSession {
                 break;
             }
             if last_msg.elapsed() > Duration::from_millis(plan.idle_ms)
-                && !messages.is_empty()
+                && (!messages.is_empty() || !held.is_empty())
             {
                 // idle after activity
                 if !plan.has_filter || start_from != "end" {
@@ -322,29 +362,42 @@ impl KafkaSession {
                         continue;
                     }
 
-                    let view = self
-                        .decode_message_view(
-                            msg.topic(),
+                    let payload_len = msg.payload_len();
+                    if plan.has_filter {
+                        let view = self
+                            .decode_message_view(
+                                msg.topic(),
+                                partition,
+                                offset,
+                                ts,
+                                key,
+                                msg.payload(),
+                                headers,
+                            )
+                            .await;
+
+                        if !matches_decoded_message(&view, &filter) {
+                            continue;
+                        }
+                        let mut view = view;
+                        cap_message_value(&mut view, payload_len);
+                        messages.push(view);
+                    } else {
+                        held.push(HeldRaw {
+                            topic: msg.topic().to_string(),
                             partition,
                             offset,
-                            ts,
-                            key,
-                            msg.payload(),
+                            timestamp: ts,
+                            key: key.map(|k| k.to_vec()),
+                            payload: msg.payload().map(|p| p.to_vec()),
                             headers,
-                        )
-                        .await;
-
-                    if !matches_decoded_message(&view, &filter) {
-                        continue;
+                            payload_len,
+                        });
                     }
-                    let mut view = view;
-                    cap_message_value(&mut view, msg.payload_len());
-
-                    messages.push(view);
                     let taken = taken_by_part.entry(partition).or_insert(0);
                     *taken += 1;
 
-                    if !plan.has_filter && start_from == "beginning" && *taken >= plan.limit {
+                    if !plan.has_filter && *taken >= plan.limit {
                         finished_partitions.insert(partition);
                     }
                     if plan.has_filter && start_from != "end" && messages.len() as i32 >= plan.limit
@@ -360,6 +413,42 @@ impl KafkaSession {
                     }
                 }
             }
+        }
+
+        if !plan.has_filter {
+            if held.is_empty() {
+                if let Some(err) = err_slot.peek_error() {
+                    if err.contains("authorization") {
+                        return Err(format!("ACL denied: {err}"));
+                    }
+                    if err.contains("Failed to resolve") {
+                        return Err(err);
+                    }
+                    return Err(format!(
+                        "No messages received; broker error while consuming: {err}"
+                    ));
+                }
+                return Ok(vec![]);
+            }
+            sort_held(&mut held, plan.newest_first);
+            held.truncate(plan.limit as usize);
+            let mut decoded = Vec::with_capacity(held.len());
+            for row in held {
+                let mut view = self
+                    .decode_message_view(
+                        &row.topic,
+                        row.partition,
+                        row.offset,
+                        row.timestamp,
+                        row.key.as_deref(),
+                        row.payload.as_deref(),
+                        row.headers,
+                    )
+                    .await;
+                cap_message_value(&mut view, row.payload_len);
+                decoded.push(view);
+            }
+            return Ok(decoded);
         }
 
         if messages.is_empty() {

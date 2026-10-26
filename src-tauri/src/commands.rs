@@ -6,7 +6,7 @@ use crate::types::*;
 use crate::updates::UpdateState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::sync::{Mutex, Semaphore};
 
 /// Hot path (offsets + consume) — never share with GroupCoordinator lag walks.
@@ -418,6 +418,44 @@ pub async fn kafka_fetch_message(
     })
     .await
     .map_err(|e| format!("fetch message join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn kafka_trace_key(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    request: TraceRequest,
+) -> Result<TraceResult, String> {
+    let permit = state.kafka_walk.clone().try_acquire_owned().map_err(|_| {
+        "A group snapshot is still running — try again in a moment".to_string()
+    })?;
+    let (worker, generation) = {
+        let guard = state.kafka.lock().await;
+        let generation = guard.trace_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        (guard.clone_for_worker()?, generation)
+    };
+    let app = app.clone();
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        futures::executor::block_on(crate::kafka::trace::trace_key(
+            &worker,
+            request,
+            generation,
+            &rt,
+            |p| {
+                let _ = app.emit("kafka://trace-progress", p);
+            },
+        ))
+    })
+    .await
+    .map_err(|e| format!("trace join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn kafka_trace_cancel(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.kafka.lock().await.trace_gen.fetch_add(1, Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]

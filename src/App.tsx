@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ConfirmModal from './components/ConfirmModal'
+import TracePanel from './components/TracePanel'
 import ConnectionDrawer from './components/ConnectionDrawer'
 import ErrorModal from './components/ErrorModal'
 import TopBar, { type AppTab } from './components/TopBar'
@@ -19,6 +20,15 @@ import { useTheme } from './hooks/useTheme'
 import { detectUpdateOs } from './lib/updateOs'
 import { installWindowStatePersistence, restoreWindowState } from './lib/windowState'
 import type { MsgKey } from './i18n'
+import {
+  addTopicToSet,
+  createTopicSet,
+  deleteTopicSet,
+  loadTopicSets,
+  persistTopicSets,
+  removeTopicFromSet,
+  type TopicSet,
+} from './lib/topicSets'
 
 function isOverlayTab(tab: AppTab) {
   return tab === 'settings' || tab === 'logs'
@@ -33,6 +43,26 @@ export default function App() {
   const a = useKafdeskApp(pushLog)
   const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false)
   const [groupsMode, setGroupsMode] = useState<GroupsMode>('topic')
+  const [topicSets, setTopicSets] = useState<TopicSet[]>([])
+  const [activeSetId, setActiveSetId] = useState<string | null>(null)
+  const [traceOpen, setTraceOpen] = useState(false)
+  const [traceNeedle, setTraceNeedle] = useState('')
+
+  useEffect(() => {
+    setTopicSets(loadTopicSets(a.activeId))
+    setActiveSetId(null)
+  }, [a.activeId])
+
+  function saveSets(next: TopicSet[]) {
+    setTopicSets(next)
+    persistTopicSets(a.activeId, next)
+  }
+
+  function openTrace(needle: string) {
+    setTraceNeedle(needle)
+    setTraceOpen(true)
+    if (!activeSetId && topicSets[0]) setActiveSetId(topicSets[0].id)
+  }
   const tabBeforeOverlay = useRef<AppTab>('consume')
 
   useEffect(() => {
@@ -271,6 +301,17 @@ export default function App() {
                 onOpenSubjectInSchemas={a.openSubjectInSchemas}
                 topicLag={a.groupSnapshot?.topics}
                 showLagFilter={a.tab === 'consume' || a.tab === 'tail' || a.tab === 'groups'}
+                topicSets={topicSets}
+                activeSetId={activeSetId}
+                onActiveSetId={setActiveSetId}
+                onCreateSet={(name, topic) => {
+                  const next = createTopicSet(topicSets, name, topic)
+                  if (next === topicSets) return
+                  saveSets(next)
+                  setActiveSetId(next[next.length - 1].id)
+                }}
+                onAddTopicToSet={(setId, topic) => saveSets(addTopicToSet(topicSets, setId, topic))}
+                onOpenTrace={() => openTrace('')}
               />
             )}
 
@@ -288,6 +329,7 @@ export default function App() {
                 onToggleDiff={a.toggleDiffMessage}
                 onClearDiff={a.clearDiff}
                 onRepublish={a.republishMessage}
+                onTraceKey={(key) => openTrace(key)}
                 searchClauses={a.searchClauses}
                 searchHitsOn={a.searchHitsOn}
                 onOpenConsumerGroup={(groupId) => {
@@ -399,6 +441,28 @@ export default function App() {
           </div>
         )}
       </main>
+      <TracePanel
+        tr={tr}
+        open={traceOpen}
+        onClose={() => setTraceOpen(false)}
+        connected={a.connected}
+        initialNeedle={traceNeedle}
+        sets={topicSets}
+        activeSetId={activeSetId}
+        onActiveSetId={setActiveSetId}
+        clusterTopics={a.topics.map((t) => t.name)}
+        onAddTopic={(setId, topic) => saveSets(addTopicToSet(topicSets, setId, topic))}
+        onRemoveTopic={(setId, topic) => saveSets(removeTopicFromSet(topicSets, setId, topic))}
+        onDeleteSet={(setId) => {
+          const next = deleteTopicSet(topicSets, setId)
+          saveSets(next)
+          if (activeSetId === setId) setActiveSetId(next[0]?.id ?? null)
+        }}
+        onOpenHit={(hit) => {
+          setTraceOpen(false)
+          void a.openTraceHit(hit)
+        }}
+      />
     </div>
   )
 }

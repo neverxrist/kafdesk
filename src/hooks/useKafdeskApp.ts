@@ -1092,7 +1092,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     void onSubjectChange(subjectName)
   }
 
-  async function selectTopic(name: string) {
+  async function selectTopic(name: string, at?: { partition: number; offset: string }) {
     // Pause enrich; cancel in-flight consume. Only auto-read on Consume tab —
     // Produce-only ACL connections must not hit GroupAuthorizationFailed on click.
     const prevTopic = selectedTopicRef.current
@@ -1122,6 +1122,23 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setTopicGroupLags(null)
     setError(null)
     resetPartitionToAll()
+    if (at) {
+      tabRef.current = 'consume'
+      setTab('consume')
+      applyFilterState({
+        ...filterStateRef.current,
+        partitionFilter: String(at.partition),
+        startFrom: 'offset',
+        startOffset: at.offset,
+        search: '',
+        searchKey: '',
+        search2: '',
+        headerKey: '',
+        headerValue: '',
+        timeFrom: '',
+        timeTo: '',
+      })
+    }
     const wantConsume = tabRef.current === 'consume'
     try {
       if (tailing) {
@@ -1141,7 +1158,10 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
           ),
         )
         if (!wantConsume) return
-        await loadMessages(name, { ...filterStateRef.current, partitionFilter: 'all' }, details)
+        const consumeFilter = at
+          ? { ...filterStateRef.current }
+          : { ...filterStateRef.current, partitionFilter: 'all' as const }
+        await loadMessages(name, consumeFilter, details)
       } catch (err) {
         if (!wantConsume) {
           // Offsets/watermarks optional for produce — keep topic selected.
@@ -1798,6 +1818,11 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     toggleDiffMessage,
     clearDiff,
     republishMessage,
+    openTraceHit: async (hit: { topic: string; partition: number; offset: string }) => {
+      tabRef.current = 'consume'
+      setTab('consume')
+      await selectTopic(hit.topic, { partition: hit.partition, offset: hit.offset })
+    },
     loadingMessages,
     search,
     setSearch: setSearchFilter,

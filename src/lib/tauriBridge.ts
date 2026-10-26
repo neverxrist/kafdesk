@@ -10,6 +10,8 @@ import type {
   SetGroupOffsetsRequest,
   TailBatch,
   TailRequest,
+  TraceProgress,
+  TraceRequest,
   UpdateStatus,
   KafkaMessageView,
 } from '../types/kafdesk'
@@ -78,6 +80,10 @@ export function installTauriKafdesk(): void {
       listenSafe<TailBatch>('kafka://tail-batch', cb),
     onTailError: (cb: (message: string) => void) =>
       listenSafe<string>('kafka://tail-error', cb),
+    traceKey: (request: TraceRequest) => invoke('kafka_trace_key', { request }),
+    traceCancel: () => invoke('kafka_trace_cancel'),
+    onTraceProgress: (cb: (progress: TraceProgress) => void) =>
+      listenSafe<TraceProgress>('kafka://trace-progress', cb),
     setBackendDebug: (enabled: boolean) => invoke('set_backend_debug', { enabled }),
     getBackendDebug: () => invoke('get_backend_debug'),
     onBackendDebugLog: (cb: (level: 'info' | 'warn' | 'error', msg: string) => void) =>

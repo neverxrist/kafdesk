@@ -287,6 +287,65 @@ pub struct TailBatch {
     pub dropped: u64,
 }
 
+/// Exact-id search across a saved topic set. `fromMs` is clamped to the last 7 days.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceRequest {
+    pub needle: String,
+    pub topics: Vec<String>,
+    pub from_ms: i64,
+    /// Also look for `"needle"` inside payloads. Off = record key on one partition only.
+    #[serde(default)]
+    pub scan_values: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceHit {
+    pub topic: String,
+    pub partition: i32,
+    pub offset: String,
+    pub timestamp: String,
+    pub key: Option<String>,
+    /// `key` or `value`.
+    pub matched: String,
+    pub preview: String,
+    /// Other id-like strings in the JSON body, for a follow-up key search.
+    pub fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceTopicStat {
+    pub topic: String,
+    pub scanned: u64,
+    pub hits: u32,
+    pub capped: bool,
+    pub key_partition: i32,
+    pub partitions: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceResult {
+    pub hits: Vec<TraceHit>,
+    pub topics: Vec<TraceTopicStat>,
+    pub partial: bool,
+    pub cancelled: bool,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceProgress {
+    pub topic: String,
+    pub done: usize,
+    pub total: usize,
+    pub hits: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TailRequest {

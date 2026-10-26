@@ -446,6 +446,7 @@ export default function ConsumePanel({
   onToggleDiff,
   onClearDiff,
   onRepublish,
+  onTraceKey,
   onOpenConsumerGroup,
   searchClauses = [],
   searchHitsOn = [false, false],
@@ -464,6 +465,7 @@ export default function ConsumePanel({
   onToggleDiff: (m: KafkaMessageView) => void
   onClearDiff: () => void
   onRepublish: (m: KafkaMessageView) => void
+  onTraceKey?: (key: string) => void
   onOpenConsumerGroup?: (groupId: string) => void
   searchClauses?: SearchClause[]
   searchHitsOn?: [boolean, boolean]
@@ -477,6 +479,8 @@ export default function ConsumePanel({
   const [dockOpen, setDockOpen] = useState(false)
   const [consumersOpen, setConsumersOpen] = useState(false)
   const consumersRef = useRef<HTMLDivElement>(null)
+  const [partitionsOpen, setPartitionsOpen] = useState(false)
+  const partitionsRef = useRef<HTMLDivElement>(null)
   const [inspectId, setInspectId] = useState<string | null>(null)
   const [dockShowDiff, setDockShowDiff] = useState(() => {
     try {
@@ -538,6 +542,7 @@ export default function ConsumePanel({
     setDockOpen(false)
     setInspectId(null)
     setConsumersOpen(false)
+    setPartitionsOpen(false)
   }, [selectedTopic])
 
   const consumerChips = useMemo(() => {
@@ -563,6 +568,22 @@ export default function ConsumePanel({
       window.removeEventListener('keydown', onKey)
     }
   }, [consumersOpen])
+
+  useEffect(() => {
+    if (!partitionsOpen) return
+    function onPointer(e: PointerEvent) {
+      if (!partitionsRef.current?.contains(e.target as Node)) setPartitionsOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setPartitionsOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointer)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [partitionsOpen])
 
   // When Seek/Batch direction changes, reset list order to match (flip still local).
   const prevStartFrom = useRef(startFrom)
@@ -679,6 +700,33 @@ export default function ConsumePanel({
   const showInlineDiff = viewMode === 'full'
   // Virt only in Compact — Full cards vary a lot in height; absolute windowing overlapped text.
   const useVirt = viewMode === 'compact' && !groupByPartitions
+  const shownPartitions = topicDetails?.partitions.slice(0, 6) ?? []
+  const restPartitions = topicDetails?.partitions.slice(6) ?? []
+
+  function partitionButton(p: (typeof shownPartitions)[number]) {
+    const hidden = hiddenPartitions.has(p.partitionId)
+    const offsets = tr('partitionOffsets', {
+      low: p.offsetLow ?? '?',
+      high: p.offsetHigh ?? '?',
+    })
+    return (
+      <button
+        key={p.partitionId}
+        type="button"
+        className={`chip partition-chip${hidden ? ' muted' : ' active'}`}
+        title={
+          hidden
+            ? tr('partitionFilterOff')
+            : `${tr('partitionFilterOn', { id: p.partitionId })} · ${offsets}`
+        }
+        aria-pressed={!hidden}
+        onClick={() => togglePartition(p.partitionId)}
+      >
+        <strong>p{p.partitionId}</strong>
+        <span className="partition-msgs">≈{p.approxMessages ?? '?'}</span>
+      </button>
+    )
+  }
 
   return (
     <section className={`messages${dockOpen ? ' messages-with-dock' : ''}`}>
@@ -689,30 +737,25 @@ export default function ConsumePanel({
               <div className="topic-toolbar-main">
                 <h2 title={topicDetails.name}>{topicDetails.name}</h2>
                 <div className="partitions" aria-label={tr('partitionsCount', { n: topicDetails.partitions.length })}>
-                  {topicDetails.partitions.map((p) => {
-                    const hidden = hiddenPartitions.has(p.partitionId)
-                    const offsets = tr('partitionOffsets', {
-                      low: p.offsetLow ?? '?',
-                      high: p.offsetHigh ?? '?',
-                    })
-                    return (
+                  {shownPartitions.map((p) => partitionButton(p))}
+                  {restPartitions.length > 0 && (
+                    <div className="partition-more-wrap" ref={partitionsRef}>
                       <button
-                        key={p.partitionId}
                         type="button"
-                        className={`chip partition-chip${hidden ? ' muted' : ' active'}`}
-                        title={
-                          hidden
-                            ? tr('partitionFilterOff')
-                            : `${tr('partitionFilterOn', { id: p.partitionId })} · ${offsets}`
-                        }
-                        aria-pressed={!hidden}
-                        onClick={() => togglePartition(p.partitionId)}
+                        className="topic-lag-chip topic-lag-more"
+                        aria-expanded={partitionsOpen}
+                        title={tr('partitionsMoreTitle', { n: restPartitions.length })}
+                        onClick={() => setPartitionsOpen((v) => !v)}
                       >
-                        <strong>p{p.partitionId}</strong>
-                        <span className="partition-msgs">≈{p.approxMessages ?? '?'}</span>
+                        {tr('topicConsumersMore', { n: restPartitions.length })}
                       </button>
-                    )
-                  })}
+                      {partitionsOpen && (
+                        <div className="partition-more-menu" role="menu">
+                          {restPartitions.map((p) => partitionButton(p))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <button
                     type="button"
                     className={`batch-sort-btn group-by-partitions-btn${groupByPartitions ? ' active' : ''}`}
@@ -894,6 +937,7 @@ export default function ConsumePanel({
             setDockDiff(false)
           }}
           onRepublish={onRepublish}
+          onTraceKey={onTraceKey}
           searchClauses={searchClauses}
           searchHitsOn={searchHitsOn}
         />
