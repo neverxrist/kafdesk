@@ -46,6 +46,7 @@ export default function TopicsSidebar({
   hasRegistry,
   onOpenSubjectInSchemas,
   topicLag,
+  showLagFilter = true,
 }: {
   tr: Tr
   connected: boolean
@@ -61,6 +62,8 @@ export default function TopicsSidebar({
   onOpenSubjectInSchemas?: (subject: string) => void
   /** Consumer groups + lag per topic from the last group snapshot. */
   topicLag?: TopicLagRow[]
+  /** Consume, Tail, Groups. Produce picks a write target — lag filter does not belong there. */
+  showLagFilter?: boolean
 }) {
   const [onlyWithLag, setOnlyWithLag] = useState(false)
   const lagByTopic = useMemo(() => {
@@ -170,7 +173,8 @@ export default function TopicsSidebar({
     const name = t.name.toLowerCase()
     const chipOk = chipQueries.length === 0 || chipQueries.some((q) => name.includes(q))
     const typedOk = !typedQuery || name.includes(typedQuery)
-    const lagOk = !onlyWithLag || !hasTopicLag || (lagByTopic.get(t.name)?.totalLag ?? 0) > 0
+    const lagOk =
+      !showLagFilter || !onlyWithLag || !hasTopicLag || (lagByTopic.get(t.name)?.totalLag ?? 0) > 0
     return chipOk && typedOk && lagOk
   })
 
@@ -326,7 +330,7 @@ export default function TopicsSidebar({
       />
       <div className="topics-head">
         <label className="topics-head-label">{tr('topics', { n: visibleCount })}</label>
-        {hasTopicLag && (
+        {showLagFilter && hasTopicLag && (
           <label className="topic-only-pinned" title={tr('topicsWithLagOnlyTitle')}>
             <input
               type="checkbox"

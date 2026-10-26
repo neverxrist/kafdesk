@@ -3472,16 +3472,28 @@ body.topics-resizing * {
 .topics-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
   margin-bottom: 0.4rem;
+  min-width: 0;
 }
 
 .topics-head-label {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--muted);
   text-transform: none;
+}
+
+.topics-head .topic-only-pinned {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .topics-collapse-btn {

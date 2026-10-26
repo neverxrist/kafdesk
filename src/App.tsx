@@ -270,6 +270,7 @@ export default function App() {
                 hasRegistry={a.hasRegistry}
                 onOpenSubjectInSchemas={a.openSubjectInSchemas}
                 topicLag={a.groupSnapshot?.topics}
+                showLagFilter={a.tab === 'consume' || a.tab === 'tail' || a.tab === 'groups'}
               />
             )}
 
