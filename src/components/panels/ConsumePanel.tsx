@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ConsumeStartFrom, KafkaMessageView, TopicInfo } from '../../types/kafdesk'
 import EmptyState from '../EmptyState'
 import MessageCard from '../MessageCard'
@@ -65,8 +65,12 @@ export function ConsumeToolbar({
   setStartOffset,
   limit,
   setLimit,
+  onResetBar,
   busy,
   onLoadMessages,
+  traceOpen = false,
+  onOpenTrace,
+  traceBar,
 }: {
   tr: Tr
   selectedTopic: string | null
@@ -104,8 +108,12 @@ export function ConsumeToolbar({
   setStartOffset: (v: string) => void
   limit: number
   setLimit: (v: number) => void
+  onResetBar: () => void
   busy: boolean
   onLoadMessages: () => void
+  traceOpen?: boolean
+  onOpenTrace?: () => void
+  traceBar?: ReactNode
 }) {
   const [savedId, setSavedId] = useState('')
   const [queryName, setQueryName] = useState('')
@@ -117,6 +125,18 @@ export function ConsumeToolbar({
     (headerValue.trim() ? 1 : 0) +
     (timeFrom ? 1 : 0) +
     (timeTo ? 1 : 0)
+  const filtersActive =
+    Boolean(search.trim()) ||
+    Boolean(search2.trim()) ||
+    dualSearch ||
+    advancedActive > 0 ||
+    partitionFilter !== 'all' ||
+    startFrom !== 'end' ||
+    limit !== 30
+
+  function clearFilters() {
+    onResetBar()
+  }
 
   // Keep the raw text while typing (allow empty field); sync from outside
   // changes (saved queries, initial value) only when not focused editing.
@@ -135,6 +155,10 @@ export function ConsumeToolbar({
   return (
     <div className="toolbar toolbar-consume">
       <div className="toolbar-row toolbar-consume-main">
+        {traceOpen ? (
+          traceBar
+        ) : (
+          <>
         <div className="toolbar-zone toolbar-zone-filter">
           <span className="toolbar-zone-label">{tr('filterTag')}</span>
           <div className="toolbar-zone-fields">
@@ -236,6 +260,17 @@ export function ConsumeToolbar({
         </div>
 
         <div className="toolbar-actions">
+          {filtersActive && (
+            <button
+              type="button"
+              className="toolbar-clear-filters"
+              onClick={clearFilters}
+              title={tr('clearFilters')}
+              aria-label={tr('clearFilters')}
+            >
+              <ClearFiltersIcon />
+            </button>
+          )}
           <button
             type="button"
             className={
@@ -254,6 +289,19 @@ export function ConsumeToolbar({
             ) : null}
             <MoreFiltersIcon />
           </button>
+          {onOpenTrace && (
+            <div className="toolbar-trace-launch">
+              <span>{tr('traceBy')}</span>
+              <button
+                type="button"
+                className="toolbar-trace-open"
+                onClick={onOpenTrace}
+                title={tr('traceToolbarTitle')}
+              >
+                {tr('traceToolbar')}
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className={`primary toolbar-refresh-btn${busy ? ' busy' : ''}`}
@@ -265,9 +313,11 @@ export function ConsumeToolbar({
             <RefreshIcon />
           </button>
         </div>
+          </>
+        )}
       </div>
 
-      {showAdvanced && (
+      {showAdvanced && !traceOpen && (
         <div className="toolbar-advanced">
           <div className="toolbar-adv-section">
             <span className="toolbar-adv-caption">{tr('advHeadersTime')}</span>
@@ -447,6 +497,7 @@ export default function ConsumePanel({
   onClearDiff,
   onRepublish,
   onTraceKey,
+  traceView,
   onOpenConsumerGroup,
   searchClauses = [],
   searchHitsOn = [false, false],
@@ -466,6 +517,7 @@ export default function ConsumePanel({
   onClearDiff: () => void
   onRepublish: (m: KafkaMessageView) => void
   onTraceKey?: (key: string) => void
+  traceView?: ReactNode
   onOpenConsumerGroup?: (groupId: string) => void
   searchClauses?: SearchClause[]
   searchHitsOn?: [boolean, boolean]
@@ -699,7 +751,7 @@ export default function ConsumePanel({
   // Compact: diff only in the bottom dock. Full: classic inline panel.
   const showInlineDiff = viewMode === 'full'
   // Virt only in Compact — Full cards vary a lot in height; absolute windowing overlapped text.
-  const useVirt = viewMode === 'compact' && !groupByPartitions
+  const useVirt = viewMode === 'compact' && !groupByPartitions && !traceView
   const shownPartitions = topicDetails?.partitions.slice(0, 6) ?? []
   const restPartitions = topicDetails?.partitions.slice(6) ?? []
 
@@ -730,7 +782,7 @@ export default function ConsumePanel({
 
   return (
     <section className={`messages${dockOpen ? ' messages-with-dock' : ''}`}>
-      {topicDetails && (
+      {!traceView && topicDetails && (
         <div className="panel messages-topic-panel">
           <div className="messages-panel-head">
             <div className="messages-panel-toolbar">
@@ -860,7 +912,7 @@ export default function ConsumePanel({
         </div>
       )}
 
-      {showInlineDiff && diffMessages.length === 2 && (
+      {!traceView && showInlineDiff && diffMessages.length === 2 && (
         <MessageDiffPanel
           tr={tr}
           left={diffMessages[0]}
@@ -869,7 +921,7 @@ export default function ConsumePanel({
           onRemove={onToggleDiff}
         />
       )}
-      {showInlineDiff && diffMessages.length === 1 && (
+      {!traceView && showInlineDiff && diffMessages.length === 1 && (
         <div className="msg-diff-hint panel">
           <span>{tr('diffPickSecond')}</span>
           <button type="button" onClick={() => onToggleDiff(diffMessages[0])}>
@@ -878,7 +930,7 @@ export default function ConsumePanel({
         </div>
       )}
 
-      {messages.length === 0 ? (
+      {traceView ?? (messages.length === 0 ? (
         <div className="messages-scroll drag-scroll">
           <EmptyState
             kind="events"
@@ -917,9 +969,9 @@ export default function ConsumePanel({
               ))
             : flatMessages.map(renderCard)}
         </div>
-      )}
+      ))}
 
-      {dockOpen && (
+      {dockOpen && !traceView && (
         <MessageInspectorDock
           tr={tr}
           messages={flatMessages}
@@ -943,6 +995,20 @@ export default function ConsumePanel({
         />
       )}
     </section>
+  )
+}
+
+function ClearFiltersIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        d="M4 4l8 8M12 4l-8 8"
+      />
+    </svg>
   )
 }
 

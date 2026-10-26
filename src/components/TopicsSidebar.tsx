@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import EmptyState from './EmptyState'
 import TopicSchemaPanel from './TopicSchemaPanel'
 import type { TopicInfo, TopicLagRow } from '../types/kafdesk'
-import type { TopicSet } from '../lib/topicSets'
+import { TOPIC_SET_MAX, type TopicSet } from '../lib/topicSets'
 import type { useLocale } from '../hooks/useLocale'
 import { isDlqTopic, isInternalTopic } from '../lib/pinnedTopics'
 import {
@@ -50,11 +50,12 @@ export default function TopicsSidebar({
   topicLag,
   showLagFilter = true,
   topicSets = [],
-  activeSetId = null,
   onActiveSetId,
   onCreateSet,
   onAddTopicToSet,
-  onOpenTrace,
+  pickingSet = false,
+  setTopics = [],
+  onToggleSetTopic,
 }: {
   tr: Tr
   connected: boolean
@@ -73,11 +74,13 @@ export default function TopicsSidebar({
   /** Consume, Tail, Groups. Produce picks a write target — lag filter does not belong there. */
   showLagFilter?: boolean
   topicSets?: TopicSet[]
-  activeSetId?: string | null
   onActiveSetId?: (id: string | null) => void
   onCreateSet?: (name: string, topic: string) => void
   onAddTopicToSet?: (setId: string, topic: string) => void
-  onOpenTrace?: () => void
+  /** Trace is open: a click adds or removes the topic from the active set. */
+  pickingSet?: boolean
+  setTopics?: string[]
+  onToggleSetTopic?: (name: string) => void
 }) {
   const [onlyWithLag, setOnlyWithLag] = useState(false)
   const lagByTopic = useMemo(() => {
@@ -192,11 +195,6 @@ export default function TopicsSidebar({
     setCtxMenu(null)
   }
 
-  const activeSet = topicSets.find((s) => s.id === activeSetId) ?? null
-  const activeSetNames = activeSet ? new Set(activeSet.topics) : null
-  const missingSetTopics = activeSet
-    ? activeSet.topics.filter((name) => !topics.some((t) => t.name === name))
-    : []
   const chipQueries = savedFilters
     .filter((f) => activeFilterIds.includes(f.id))
     .map((f) => f.query.trim().toLowerCase())
@@ -208,8 +206,7 @@ export default function TopicsSidebar({
     const typedOk = !typedQuery || name.includes(typedQuery)
     const lagOk =
       !showLagFilter || !onlyWithLag || !hasTopicLag || (lagByTopic.get(t.name)?.totalLag ?? 0) > 0
-    const setOk = !activeSetNames || activeSetNames.has(t.name)
-    return chipOk && typedOk && lagOk && setOk
+    return chipOk && typedOk && lagOk
   })
 
   const pinnedSet = new Set(pinnedTopics)
@@ -285,12 +282,21 @@ export default function TopicsSidebar({
     setActiveFilterIds((ids) => ids.filter((x) => x !== id))
   }
 
+  const setMember = new Set(setTopics)
+  const setFull = setTopics.length >= TOPIC_SET_MAX
+
   function renderTopic(t: TopicInfo) {
     const isPinned = pinnedSet.has(t.name)
-    const active = selectedTopic === t.name
+    const active = !pickingSet && selectedTopic === t.name
+    const inSet = pickingSet && setMember.has(t.name)
     const lag = lagByTopic.get(t.name)
+    const pickTitle = inSet
+      ? tr('topicSetRemove')
+      : setFull
+        ? tr('topicSetFull')
+        : tr('topicSetPick')
     return (
-      <div key={t.name} className={`topic-row ${active ? 'active' : ''}`}>
+      <div key={t.name} className={`topic-row${active ? ' active' : ''}${inSet ? ' in-set' : ''}`}>
         <button
           type="button"
           className="topic-pin"
@@ -306,10 +312,19 @@ export default function TopicsSidebar({
         <button
           type="button"
           className="topic-item"
-          title={`${t.name} · ${tr('topicSchemaCtxHint')}`}
-          onClick={() => onSelectTopic(t.name)}
+          title={pickingSet ? `${t.name} · ${pickTitle}` : `${t.name} · ${tr('topicSchemaCtxHint')}`}
+          aria-pressed={pickingSet ? inSet : undefined}
+          onClick={() => {
+            if (pickingSet && onToggleSetTopic) onToggleSetTopic(t.name)
+            else onSelectTopic(t.name)
+          }}
           onContextMenu={(e) => onTopicContextMenu(e, t.name)}
         >
+          {pickingSet && (
+            <span className={`topic-set-mark${inSet ? ' on' : ''}`} aria-hidden>
+              {inSet ? '✓' : ''}
+            </span>
+          )}
           <span className="topic-name">{t.name}</span>
           <span className="topic-stats" aria-label={tr('partitionsCount', { n: t.partitions.length })}>
             {lag && (
@@ -376,38 +391,6 @@ export default function TopicsSidebar({
           </label>
         )}
       </div>
-      {topicSets.length > 0 && onActiveSetId && (
-        <div className="topic-set-row">
-          <select
-            value={activeSetId ?? ''}
-            aria-label={tr('topicSetIn')}
-            disabled={!connected}
-            onChange={(e) => onActiveSetId(e.target.value || null)}
-          >
-            <option value="">{tr('topicSetAll')}</option>
-            {topicSets.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.topics.length})
-              </option>
-            ))}
-          </select>
-          {onOpenTrace && (
-            <button
-              type="button"
-              className="topic-set-trace"
-              disabled={!connected || !activeSetId}
-              onClick={onOpenTrace}
-            >
-              {tr('topicSetTrace')}
-            </button>
-          )}
-        </div>
-      )}
-      {missingSetTopics.length > 0 && (
-        <p className="topic-set-missing">
-          {missingSetTopics.join(', ')} · {tr('topicSetMissing')}
-        </p>
-      )}
       <div className="topic-filter-row">
         <input
           value={topicQuery}
@@ -440,6 +423,7 @@ export default function TopicsSidebar({
           ⟨
         </button>
       </div>
+      {pickingSet && <p className="topic-pick-hint">{tr('tracePickHint')}</p>}
       {savedFilters.length > 0 && (
         <div className="topic-filter-chips" aria-label={tr('savedTopicFilters')}>
           {savedFilters.map((f) => (

@@ -330,6 +330,33 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
     scheduleConsumeReload({ limit: v }, 350)
   }
 
+  function resetFilterAndSeek() {
+    const next = defaultConsumeFilterState()
+    cancelScheduledConsumeReload()
+    filterStateRef.current = next
+    setSearch(next.search)
+    setSearchKey(next.searchKey)
+    setSearchScope(next.searchScope)
+    setSearch2(next.search2)
+    setSearchScope2(next.searchScope2)
+    setDualSearch(false)
+    setHeaderKey(next.headerKey)
+    setHeaderValue(next.headerValue)
+    setTimeFrom(next.timeFrom)
+    setTimeTo(next.timeTo)
+    setPartitionFilter(next.partitionFilter)
+    setStartFrom(next.startFrom)
+    setStartOffset(next.startOffset)
+    setLimit(next.limit)
+    setSearchHitsOnState((prev) => {
+      if (!prev[0] && !prev[1]) return prev
+      const off: SearchHitsOn = [false, false]
+      persistHitsOn(off)
+      return off
+    })
+    scheduleConsumeReload({})
+  }
+
   /** Reset partition without broker reload (e.g. on topic switch). */
   function resetPartitionToAll() {
     setPartitionFilter('all')
@@ -377,6 +404,7 @@ export function useConsumeFilters(messages: KafkaMessageView[]) {
     setStartFromFilter,
     setStartOffsetFilter,
     setLimitFilter,
+    resetFilterAndSeek,
     resetPartitionToAll,
   }
 }

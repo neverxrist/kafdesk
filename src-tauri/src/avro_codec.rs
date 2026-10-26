@@ -25,8 +25,12 @@ pub fn encode_json_with_schema(schema_str: &str, json: &JsonValue) -> Result<Vec
 
 pub fn decode_datum_to_json(schema_str: &str, body: &[u8]) -> Result<JsonValue, String> {
     let schema = Schema::parse_str(schema_str).map_err(|e| format!("Avro schema: {e}"))?;
+    decode_with_schema(&schema, body)
+}
+
+pub fn decode_with_schema(schema: &Schema, body: &[u8]) -> Result<JsonValue, String> {
     let mut cursor = std::io::Cursor::new(body);
-    let value = GenericDatumReader::builder(&schema)
+    let value = GenericDatumReader::builder(schema)
         .build()
         .map_err(|e| format!("Avro decode (reader): {e}"))?
         .read_value(&mut cursor)

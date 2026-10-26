@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ConfirmModal from './components/ConfirmModal'
-import TracePanel from './components/TracePanel'
+import { TraceResults, TraceToolbar, useTraceRun } from './components/TracePanel'
 import ConnectionDrawer from './components/ConnectionDrawer'
 import ErrorModal from './components/ErrorModal'
 import TopBar, { type AppTab } from './components/TopBar'
@@ -58,11 +58,20 @@ export default function App() {
     persistTopicSets(a.activeId, next)
   }
 
-  function openTrace(needle: string) {
-    setTraceNeedle(needle)
+  function openTrace(needle?: string) {
+    if (needle) setTraceNeedle(needle)
     setTraceOpen(true)
+    if (a.tab !== 'consume') a.setTab('consume')
     if (!activeSetId && topicSets[0]) setActiveSetId(topicSets[0].id)
   }
+
+  const trace = useTraceRun({
+    tr,
+    open: traceOpen,
+    initialNeedle: traceNeedle,
+    sets: topicSets,
+    activeSetId,
+  })
   const tabBeforeOverlay = useRef<AppTab>('consume')
 
   useEffect(() => {
@@ -237,8 +246,41 @@ export default function App() {
             setStartOffset={a.setStartOffset}
             limit={a.limit}
             setLimit={a.setLimit}
+            onResetBar={a.resetFilterAndSeek}
             busy={a.loadingMessages}
             onLoadMessages={a.loadMessages}
+            traceOpen={traceOpen}
+            onOpenTrace={() => openTrace()}
+            traceBar={
+              <TraceToolbar
+                tr={tr}
+                connected={a.connected}
+                sets={topicSets}
+                active={trace.active}
+                needle={trace.needle}
+                setNeedle={trace.setNeedle}
+                windowId={trace.windowId}
+                chooseWindow={trace.chooseWindow}
+                scanValues={trace.scanValues}
+                chooseBodies={trace.chooseBodies}
+                running={trace.running}
+                onRun={() => void trace.run(trace.needle, trace.scanValues)}
+                onStop={trace.stop}
+                onClose={() => setTraceOpen(false)}
+                onActiveSetId={setActiveSetId}
+                onCreateSet={(name, topic) => {
+                  const next = createTopicSet(topicSets, name, topic)
+                  if (next === topicSets) return
+                  saveSets(next)
+                  setActiveSetId(next[next.length - 1].id)
+                }}
+                onDeleteSet={(setId) => {
+                  const next = deleteTopicSet(topicSets, setId)
+                  saveSets(next)
+                  if (activeSetId === setId) setActiveSetId(next[0]?.id ?? null)
+                }}
+              />
+            }
           />
         )}
         {a.tab === 'tail' && (
@@ -302,8 +344,18 @@ export default function App() {
                 topicLag={a.groupSnapshot?.topics}
                 showLagFilter={a.tab === 'consume' || a.tab === 'tail' || a.tab === 'groups'}
                 topicSets={topicSets}
-                activeSetId={activeSetId}
                 onActiveSetId={setActiveSetId}
+                pickingSet={a.tab === 'consume' && traceOpen && !!trace.active}
+                setTopics={a.tab === 'consume' && traceOpen && trace.active ? trace.active.topics : []}
+                onToggleSetTopic={(name) => {
+                  const set = trace.active
+                  if (!set) return
+                  saveSets(
+                    set.topics.includes(name)
+                      ? removeTopicFromSet(topicSets, set.id, name)
+                      : addTopicToSet(topicSets, set.id, name),
+                  )
+                }}
                 onCreateSet={(name, topic) => {
                   const next = createTopicSet(topicSets, name, topic)
                   if (next === topicSets) return
@@ -311,7 +363,6 @@ export default function App() {
                   setActiveSetId(next[next.length - 1].id)
                 }}
                 onAddTopicToSet={(setId, topic) => saveSets(addTopicToSet(topicSets, setId, topic))}
-                onOpenTrace={() => openTrace('')}
               />
             )}
 
@@ -330,6 +381,25 @@ export default function App() {
                 onClearDiff={a.clearDiff}
                 onRepublish={a.republishMessage}
                 onTraceKey={(key) => openTrace(key)}
+                traceView={
+                  traceOpen ? (
+                    <TraceResults
+                      tr={tr}
+                      connected={a.connected}
+                      active={trace.active}
+                      clusterTopics={a.topics.map((t) => t.name)}
+                      onRemoveTopic={(setId, topic) => saveSets(removeTopicFromSet(topicSets, setId, topic))}
+                      running={trace.running}
+                      progress={trace.progress}
+                      result={trace.result}
+                      error={trace.error}
+                      onOpenHit={(hit) => {
+                        setTraceOpen(false)
+                        void a.openTraceHit(hit, trace.needle)
+                      }}
+                    />
+                  ) : undefined
+                }
                 searchClauses={a.searchClauses}
                 searchHitsOn={a.searchHitsOn}
                 onOpenConsumerGroup={(groupId) => {
@@ -441,28 +511,6 @@ export default function App() {
           </div>
         )}
       </main>
-      <TracePanel
-        tr={tr}
-        open={traceOpen}
-        onClose={() => setTraceOpen(false)}
-        connected={a.connected}
-        initialNeedle={traceNeedle}
-        sets={topicSets}
-        activeSetId={activeSetId}
-        onActiveSetId={setActiveSetId}
-        clusterTopics={a.topics.map((t) => t.name)}
-        onAddTopic={(setId, topic) => saveSets(addTopicToSet(topicSets, setId, topic))}
-        onRemoveTopic={(setId, topic) => saveSets(removeTopicFromSet(topicSets, setId, topic))}
-        onDeleteSet={(setId) => {
-          const next = deleteTopicSet(topicSets, setId)
-          saveSets(next)
-          if (activeSetId === setId) setActiveSetId(next[0]?.id ?? null)
-        }}
-        onOpenHit={(hit) => {
-          setTraceOpen(false)
-          void a.openTraceHit(hit)
-        }}
-      />
     </div>
   )
 }

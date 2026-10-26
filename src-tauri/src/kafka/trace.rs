@@ -4,10 +4,12 @@
 use super::admin_list_offsets::{list_offsets_chunked, OffsetSpec};
 use super::consume_ctx::ConsumeCtx;
 use super::session::KafkaSession;
-use crate::avro_codec::decode_datum_to_json;
+use crate::avro_codec::{decode_datum_to_json, decode_with_schema};
+use apache_avro::Schema;
 use crate::types::*;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::error::KafkaError;
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::Message;
 use serde_json::Value;
@@ -25,6 +27,8 @@ const KEY_CAP: usize = 20_000;
 const DEADLINE: Duration = Duration::from_secs(12);
 const MAX_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_PARTITIONS: usize = 128;
+/// Messages to read from the end when the time lookup did not answer for a partition.
+const LOOKUP_TAIL: i64 = 256;
 
 pub async fn trace_key(
     session: &KafkaSession,
@@ -216,7 +220,7 @@ fn scan_topic(
     } else {
         vec![key_partition]
     };
-    let time_at = time_offsets(consumer, topic, &want, from_ms).unwrap_or_default();
+    let time_at = time_offsets(consumer, topic, &want, from_ms)?;
 
     let mut plan: Vec<(i32, i64, i64)> = Vec::new();
     for p in want {
@@ -224,7 +228,13 @@ fn scan_topic(
         if high < 0 {
             continue;
         }
-        let start = time_at.get(&p).copied().filter(|o| *o >= 0).unwrap_or(high);
+        let start = match time_at.get(&p) {
+            Some(TimeStart::At(off)) => (*off).max(0),
+            // The broker answered "nothing in this window".
+            Some(TimeStart::Empty) => high,
+            // No answer for this partition. Read a short tail so a body hit is not skipped.
+            Some(TimeStart::Failed) | None => (high - LOOKUP_TAIL).max(0),
+        };
         if start < high {
             plan.push((p, start, high));
         }
@@ -233,6 +243,7 @@ fn scan_topic(
     let cap = if scan_values { VALUE_CAP } else { KEY_CAP };
     let (raw, scanned, capped, cancel) = read_plan(
         session,
+        rt,
         consumer,
         topic,
         needle,
@@ -248,13 +259,21 @@ fn scan_topic(
     for raw in raw {
         let mut preview = raw.preview;
         let mut fields = raw.fields;
+        let mut matched = raw.matched;
         if let Some(buf) = raw.wire.as_deref() {
             match avro_body(session, rt, buf, needle) {
                 AvroBody::Confirmed { preview: p, fields: f } => {
                     preview = p;
                     fields = f;
                 }
-                AvroBody::Rejected => continue,
+                // A short number can collide inside Avro bytes. Drop a body-only
+                // false positive. A key hit stays, without the body label.
+                AvroBody::Rejected => {
+                    if matched == "value" {
+                        continue;
+                    }
+                    matched = "key";
+                }
                 AvroBody::Unknown => {}
             }
         }
@@ -264,7 +283,7 @@ fn scan_topic(
             offset: raw.offset.to_string(),
             timestamp: raw.timestamp.to_string(),
             key: raw.key,
-            matched: raw.matched.into(),
+            matched: matched.into(),
             preview,
             fields,
         };
@@ -286,25 +305,48 @@ fn scan_topic(
     ))
 }
 
+enum TimeStart {
+    /// First offset at or after the window start.
+    At(i64),
+    /// Broker said this partition has nothing in the window.
+    Empty,
+    /// No usable offset. The caller reads a short tail instead of skipping the partition.
+    Failed,
+}
+
 fn time_offsets(
     consumer: &BaseConsumer<ConsumeCtx>,
     topic: &str,
     parts: &[i32],
     from_ms: i64,
-) -> Result<HashMap<i32, i64>, String> {
-    let mut query = TopicPartitionList::new();
-    for &p in parts {
-        query
-            .add_partition_offset(topic, p, Offset::Offset(from_ms))
-            .map_err(|e| e.to_string())?;
-    }
-    let res = consumer
-        .offsets_for_times(query, Duration::from_secs(8))
-        .map_err(|e| e.to_string())?;
+) -> Result<HashMap<i32, TimeStart>, String> {
     let mut out = HashMap::new();
-    for elem in res.elements_for_topic(topic) {
-        if let Offset::Offset(off) = elem.offset() {
-            out.insert(elem.partition(), off);
+    // One request for ~100 partitions can time out and used to look like an empty topic.
+    for chunk in parts.chunks(48) {
+        let mut query = TopicPartitionList::new();
+        for &p in chunk {
+            query
+                .add_partition_offset(topic, p, Offset::Offset(from_ms))
+                .map_err(|e| e.to_string())?;
+        }
+        let res = consumer
+            .offsets_for_times(query, Duration::from_secs(6))
+            .map_err(|e| e.to_string())?;
+        for elem in res.elements_for_topic(topic) {
+            let partition = elem.partition();
+            // A usable offset wins even when the element also carries an error.
+            // Dropping those used to skip the partition that holds the body hit.
+            if let Offset::Offset(off) = elem.offset() {
+                if off >= 0 {
+                    out.insert(partition, TimeStart::At(off));
+                    continue;
+                }
+            }
+            if elem.error().is_err() {
+                out.insert(partition, TimeStart::Failed);
+            } else {
+                out.insert(partition, TimeStart::Empty);
+            }
         }
     }
     Ok(out)
@@ -313,6 +355,7 @@ fn time_offsets(
 #[allow(clippy::too_many_arguments)]
 fn read_plan(
     session: &KafkaSession,
+    rt: &tokio::runtime::Handle,
     consumer: &BaseConsumer<ConsumeCtx>,
     topic: &str,
     needle: &str,
@@ -341,9 +384,9 @@ fn read_plan(
     let mut raw = Vec::new();
     let mut scanned = 0u64;
     let mut idle = 0u32;
-    let mut eof_run = 0u32;
     let mut capped = false;
     let mut cancel = false;
+    let mut avro = AvroDecoders::default();
     loop {
         if session.trace_stopped(generation) {
             cancel = true;
@@ -361,24 +404,25 @@ fn read_plan(
         }
         match consumer.poll(Duration::from_millis(200)) {
             None => {
-                idle += 1;
-                // First batch can take a moment; after data, a short stall means we are caught up.
-                let limit = if scanned == 0 { 25 } else { 4 };
-                if idle >= limit {
-                    capped = scanned > 0 && !open.is_empty();
-                    break;
+                // A topic with dozens of partitions delivers in bursts. Stopping after
+                // a few quiet seconds used to finish the scan on the first handful.
+                if open.len() <= 2 {
+                    idle += 1;
+                    let limit = if scanned == 0 { 40 } else { 15 };
+                    if idle >= limit {
+                        capped = !open.is_empty();
+                        break;
+                    }
                 }
+            }
+            Some(Err(KafkaError::PartitionEOF(p))) => {
+                idle = 0;
+                open.remove(&p);
             }
             Some(Err(e)) => {
                 let msg = e.to_string();
                 let lower = msg.to_lowercase();
                 if lower.contains("partition eof") || lower.contains("end of partition") {
-                    idle = 0;
-                    eof_run += 1;
-                    if eof_run > (open.len() as u32).saturating_mul(2).max(4) {
-                        open.clear();
-                        break;
-                    }
                     continue;
                 }
                 let _ = consumer.unassign();
@@ -386,7 +430,6 @@ fn read_plan(
             }
             Some(Ok(msg)) => {
                 idle = 0;
-                eof_run = 0;
                 let partition = msg.partition();
                 let offset = msg.offset();
                 let high = high_of.get(&partition).copied().unwrap_or(i64::MAX);
@@ -395,17 +438,11 @@ fn read_plan(
                     continue;
                 }
                 scanned += 1;
-                if offset >= high {
-                    open.remove(&partition);
-                    continue;
-                }
                 let key_match = key_eq(msg.key(), needle);
-                let value_match = !key_match
-                    && scan_values
-                    && (payload_has_json_string(msg.payload(), needle)
-                        || payload_has_bounded_token(msg.payload(), needle));
-                if key_match || value_match {
-                    raw.push(raw_hit(&msg, if key_match { "key" } else { "value" }, needle));
+                let value_match =
+                    scan_values && body_has_needle(session, rt, &mut avro, msg.payload(), needle);
+                if let Some(matched) = match_kind(key_match, value_match) {
+                    raw.push(raw_hit(&msg, matched, needle));
                 }
                 if offset + 1 >= high {
                     open.remove(&partition);
@@ -429,7 +466,7 @@ fn raw_hit(msg: &rdkafka::message::BorrowedMessage<'_>, matched: &'static str, n
     } else {
         preview_and_fields(payload, needle)
     };
-    let wire = if matched == "value" && payload.first() == Some(&0) && payload.len() <= 256 * 1024 {
+    let wire = if matched != "key" && payload.first() == Some(&0) && payload.len() <= 256 * 1024 {
         Some(payload.to_vec())
     } else {
         None
@@ -457,36 +494,18 @@ fn avro_body(session: &KafkaSession, rt: &tokio::runtime::Handle, payload: &[u8]
     let Some((id, body)) = super::decode::strip_confluent_wire(payload) else {
         return AvroBody::Unknown;
     };
-    if session.sr_status != "ok" {
-        return AvroBody::Unknown;
-    }
-    let cached = session
-        .schema_cache
-        .lock()
-        .ok()
-        .and_then(|c| c.get(&id).cloned());
-    let schema = if let Some(s) = cached {
-        s
-    } else if let Some(reg) = session.registry.clone() {
-        let fetched = rt.block_on(async {
-            tokio::time::timeout(Duration::from_secs(4), reg.get_schema_by_id(id)).await
-        });
-        match fetched {
-            Ok(Ok(s)) => {
-                if let Ok(mut cache) = session.schema_cache.lock() {
-                    cache.insert(id, s.clone());
-                }
-                s
-            }
-            _ => return AvroBody::Unknown,
-        }
-    } else {
+    let Some(schema) = schema_text(session, rt, id) else {
         return AvroBody::Unknown;
     };
     let Ok(json) = decode_datum_to_json(&schema, body) else {
         return AvroBody::Unknown;
     };
-    if !value_has_exact_id(&json, needle) {
+    if !json_contains_needle(&json, needle) {
+        // A long id in the raw bytes is the hit. A short number that only
+        // collided inside Avro binary is not.
+        if needle_is_specific(needle) {
+            return AvroBody::Unknown;
+        }
         return AvroBody::Rejected;
     }
     let mut fields = Vec::new();
@@ -496,6 +515,93 @@ fn avro_body(session: &KafkaSession, rt: &tokio::runtime::Handle, payload: &[u8]
         other => clip(&other.to_string(), 180),
     };
     AvroBody::Confirmed { preview, fields }
+}
+
+fn schema_text(session: &KafkaSession, rt: &tokio::runtime::Handle, id: i32) -> Option<String> {
+    if session.sr_status != "ok" {
+        return None;
+    }
+    if let Some(cached) = session.schema_cache.lock().ok().and_then(|c| c.get(&id).cloned()) {
+        return Some(cached);
+    }
+    let reg = session.registry.clone()?;
+    let fetched = rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(4), reg.get_schema_by_id(id)).await
+    });
+    match fetched {
+        Ok(Ok(schema)) => {
+            if let Ok(mut cache) = session.schema_cache.lock() {
+                cache.insert(id, schema.clone());
+            }
+            Some(schema)
+        }
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct AvroDecoders {
+    parsed: HashMap<i32, Schema>,
+    failed: HashSet<i32>,
+}
+
+impl AvroDecoders {
+    /// Same text Consume searches: the Avro record decoded to JSON.
+    fn matches(
+        &mut self,
+        session: &KafkaSession,
+        rt: &tokio::runtime::Handle,
+        payload: &[u8],
+        needle: &str,
+    ) -> bool {
+        let Some((id, body)) = super::decode::strip_confluent_wire(payload) else {
+            return false;
+        };
+        if self.failed.contains(&id) {
+            return false;
+        }
+        if !self.parsed.contains_key(&id) {
+            let Some(text) = schema_text(session, rt, id) else {
+                self.failed.insert(id);
+                return false;
+            };
+            match Schema::parse_str(&text) {
+                Ok(schema) => {
+                    self.parsed.insert(id, schema);
+                }
+                Err(_) => {
+                    self.failed.insert(id);
+                    return false;
+                }
+            }
+        }
+        let Some(schema) = self.parsed.get(&id) else {
+            return false;
+        };
+        let Ok(json) = decode_with_schema(schema, body) else {
+            return false;
+        };
+        json_contains_needle(&json, needle)
+    }
+}
+
+fn body_has_needle(
+    session: &KafkaSession,
+    rt: &tokio::runtime::Handle,
+    avro: &mut AvroDecoders,
+    payload: Option<&[u8]>,
+    needle: &str,
+) -> bool {
+    if payload_has_value(payload, needle) {
+        return true;
+    }
+    let Some(buf) = payload else {
+        return false;
+    };
+    if buf.first() != Some(&0) || buf.len() > 256 * 1024 {
+        return false;
+    }
+    avro.matches(session, rt, buf, needle)
 }
 
 fn value_has_exact_id(value: &Value, needle: &str) -> bool {
@@ -631,39 +737,71 @@ fn avro_string_len_byte(len: usize) -> Option<u8> {
     Some((len << 1) as u8)
 }
 
+fn payload_has_value(payload: Option<&[u8]>, needle: &str) -> bool {
+    if payload_has_json_string(payload, needle) || payload_has_bounded_token(payload, needle) {
+        return true;
+    }
+    // A checkout-style id is specific. It does not have to be the entire JSON string.
+    needle_is_specific(needle) && payload_contains_needle(payload, needle)
+}
+
+fn needle_is_specific(needle: &str) -> bool {
+    needle.len() >= 8 && needle.is_ascii() && needle.bytes().any(|b| !b.is_ascii_digit())
+}
+
+fn payload_contains_needle(payload: Option<&[u8]>, needle: &str) -> bool {
+    let Some(payload) = payload else { return false };
+    if needle.is_empty() || !needle.is_ascii() {
+        return false;
+    }
+    let needle = needle.as_bytes();
+    (0..payload.len()).any(|i| match_needle_at(payload, i, needle).is_some())
+}
+
+fn json_contains_needle(value: &Value, needle: &str) -> bool {
+    if value_has_exact_id(value, needle) {
+        return true;
+    }
+    if !needle_is_specific(needle) {
+        return false;
+    }
+    let text = value.to_string();
+    let needle = needle.to_ascii_lowercase();
+    text.to_ascii_lowercase().contains(&needle)
+}
+
 fn payload_has_json_string(payload: Option<&[u8]>, needle: &str) -> bool {
     let Some(payload) = payload else { return false };
     if needle.is_empty() || needle.contains(['"', '\\']) {
         return false;
     }
-    let mut quoted = Vec::with_capacity(needle.len() + 2);
-    quoted.push(b'"');
-    quoted.extend_from_slice(needle.as_bytes());
-    quoted.push(b'"');
-    if find_bytes(payload, &quoted) {
-        return true;
-    }
-    if needle.is_ascii() {
-        for b in &mut quoted {
-            *b = b.to_ascii_lowercase();
+    let needle = needle.as_bytes();
+    payload.iter().enumerate().any(|(i, b)| {
+        if *b != b'"' {
+            return false;
         }
-        return find_ascii_ci(payload, &quoted);
+        match_needle_at(payload, i + 1, needle).is_some_and(|end| end < payload.len() && payload[end] == b'"')
+    })
+}
+
+/// ASCII case-insensitive. A `/` in the needle also matches a JSON `\/`.
+fn match_needle_at(hay: &[u8], mut at: usize, needle: &[u8]) -> Option<usize> {
+    for &n in needle {
+        if at >= hay.len() {
+            return None;
+        }
+        if n == b'/' && hay[at] == b'\\' {
+            at += 1;
+            if at >= hay.len() {
+                return None;
+            }
+        }
+        if hay[at].to_ascii_lowercase() != n.to_ascii_lowercase() {
+            return None;
+        }
+        at += 1;
     }
-    false
-}
-
-fn find_bytes(hay: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && hay.len() >= needle.len() && hay.windows(needle.len()).any(|w| w == needle)
-}
-
-fn find_ascii_ci(hay: &[u8], needle_lower: &[u8]) -> bool {
-    !needle_lower.is_empty()
-        && hay.len() >= needle_lower.len()
-        && hay.windows(needle_lower.len()).any(|w| {
-            w.iter()
-                .zip(needle_lower)
-                .all(|(a, b)| a.to_ascii_lowercase() == *b)
-        })
+    Some(at)
 }
 
 /// Kafka `Utils.murmur2` + `toPositive` % partition count. Same as the Java default partitioner.
@@ -723,9 +861,27 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// A record can carry the same id in the key and in the body.
+fn match_kind(key_match: bool, value_match: bool) -> Option<&'static str> {
+    match (key_match, value_match) {
+        (false, false) => None,
+        (true, true) => Some("both"),
+        (true, false) => Some("key"),
+        (false, true) => Some("value"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_kind_reports_key_and_value_together() {
+        assert_eq!(match_kind(true, true), Some("both"));
+        assert_eq!(match_kind(true, false), Some("key"));
+        assert_eq!(match_kind(false, true), Some("value"));
+        assert_eq!(match_kind(false, false), None);
+    }
 
     #[test]
     fn kafka_partitioner_matches_java_murmur2() {
@@ -745,6 +901,37 @@ mod tests {
         assert!(!payload_has_json_string(Some(body), "abc-10"));
         assert!(!payload_has_json_string(Some(body), "abc"));
         assert!(!payload_has_json_string(Some(body), "AbC-1 extra"));
+        let slash = br#"{"id":"135CHECKOUT-OMS\/135614"}"#;
+        assert!(payload_has_json_string(Some(slash), "135CHECKOUT-OMS/135614"));
+        let plain = br#"{"id":"135CHECKOUT-OMS/135614","next":"135CHECKOUT-OMS/1356149"}"#;
+        assert!(payload_has_json_string(Some(plain), "135CHECKOUT-OMS/135614"));
+        assert!(payload_has_json_string(Some(plain), "135CHECKOUT-OMS/1356149"));
+        assert!(!payload_has_json_string(Some(plain), "135CHECKOUT-OMS/13561"));
+        let embedded = br#"{"note":"ref 135CHECKOUT-OMS/135614 tail"}"#;
+        assert!(payload_has_value(Some(embedded), "135CHECKOUT-OMS/135614"));
+        assert!(!payload_has_value(Some(br#"{"n":10001999}"#), "10001"));
+    }
+
+    #[test]
+    fn avro_string_field_is_visible_in_the_body() {
+        let schema = r#"{"type":"record","name":"M","fields":[
+            {"name":"tracking","type":"string"},
+            {"name":"maybe","type":["null","string"],"default":null}
+        ]}"#;
+        let json = serde_json::json!({
+            "tracking": "783CHECKOUT-OMS/L15972",
+            "maybe": "ref 783CHECKOUT-OMS/L15972 tail"
+        });
+        let body = crate::avro_codec::encode_json_with_schema(schema, &json).expect("encode");
+        let wire = super::super::decode::wrap_confluent_avro(7, &body);
+        assert!(
+            payload_has_value(Some(&wire), "783CHECKOUT-OMS/L15972"),
+            "avro bytes did not contain the id"
+        );
+        assert!(
+            payload_has_value(Some(&body), "783CHECKOUT-OMS/L15972"),
+            "bare avro bytes did not contain the id"
+        );
     }
 
     #[test]

@@ -48,7 +48,7 @@ import {
   topicSubjectCandidates,
 } from '../lib/messageText'
 import { filterMessages } from '../lib/messageFilter'
-import { wireSearch } from '../lib/searchScope'
+import { wireSearch, type SearchScope } from '../lib/searchScope'
 import { stripIpcError } from '../lib/ipcError'
 import {
   brokersFromHostPort,
@@ -142,6 +142,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setStartFromFilter,
     setStartOffsetFilter,
     setLimitFilter,
+    resetFilterAndSeek,
     resetPartitionToAll,
   } = consumeFilters
 
@@ -1092,7 +1093,10 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     void onSubjectChange(subjectName)
   }
 
-  async function selectTopic(name: string, at?: { partition: number; offset: string }) {
+  async function selectTopic(
+    name: string,
+    at?: { partition: number; offset: string; search?: string; searchScope?: SearchScope },
+  ) {
     // Pause enrich; cancel in-flight consume. Only auto-read on Consume tab —
     // Produce-only ACL connections must not hit GroupAuthorizationFailed on click.
     const prevTopic = selectedTopicRef.current
@@ -1125,13 +1129,16 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     if (at) {
       tabRef.current = 'consume'
       setTab('consume')
+      const scope: SearchScope = at.searchScope === 'value' ? 'value' : 'key'
+      const text = at.search?.trim() ?? ''
       applyFilterState({
         ...filterStateRef.current,
         partitionFilter: String(at.partition),
         startFrom: 'offset',
         startOffset: at.offset,
-        search: '',
+        search: text,
         searchKey: '',
+        searchScope: text ? scope : filterStateRef.current.searchScope,
         search2: '',
         headerKey: '',
         headerValue: '',
@@ -1818,10 +1825,18 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     toggleDiffMessage,
     clearDiff,
     republishMessage,
-    openTraceHit: async (hit: { topic: string; partition: number; offset: string }) => {
+    openTraceHit: async (
+      hit: { topic: string; partition: number; offset: string; matched?: string },
+      needle: string,
+    ) => {
       tabRef.current = 'consume'
       setTab('consume')
-      await selectTopic(hit.topic, { partition: hit.partition, offset: hit.offset })
+      await selectTopic(hit.topic, {
+        partition: hit.partition,
+        offset: hit.offset,
+        search: needle,
+        searchScope: hit.matched === 'key' ? 'key' : 'value',
+      })
     },
     loadingMessages,
     search,
@@ -1858,6 +1873,7 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
     setStartOffset: setStartOffsetFilter,
     partitionFilter,
     setPartitionFilter: setPartitionFilterUI,
+    resetFilterAndSeek,
     tailing,
     tailBufferCount: tailMessages.length,
     tailDropped,
