@@ -7,13 +7,16 @@ Desktop Kafka client (**Tauri 2** + Rust librdkafka) for Avro / JSON / String.
 - Connections: SASL (PLAIN / SCRAM), SSL
 - Topics, consume / live tail / produce (JSON · Avro · String)
 - Filters, saved queries, message diff, republish, produce templates
-- Consumer groups, lag, manual offsets
+- Trace a value across a saved topic set: record key and message body, including Avro
+- Consumer groups: lag by topic, trend, stalled groups, manual offsets
+- Messages over 256 KB stay a preview until you load the full value
+- Live tail flushes in batches and shows how many messages it skipped
 - Schema Registry subjects
-- Theme, EN/RU, Mac DMG updates
+- Theme, EN/RU
 
 ## Install
 
-Installers: [GitHub Releases](https://github.com/neverxrist/kafdesk/releases).
+[GitHub Releases](https://github.com/neverxrist/kafdesk/releases): macOS Apple Silicon (DMG), Windows (NSIS), Linux (AppImage and .deb).
 
 ### macOS (unsigned builds)
 

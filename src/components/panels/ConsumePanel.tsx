@@ -256,39 +256,39 @@ export function ConsumeToolbar({
                 disabled={!selectedTopic}
               />
             </div>
+            {filtersActive && (
+              <button
+                type="button"
+                className="toolbar-clear-filters"
+                onClick={clearFilters}
+                title={tr('clearFilters')}
+                aria-label={tr('clearFilters')}
+              >
+                <ClearFiltersIcon />
+              </button>
+            )}
+            <button
+              type="button"
+              className={
+                showAdvanced || advancedActive ? 'toolbar-more active' : 'toolbar-more'
+              }
+              onClick={() => setShowAdvanced((v) => !v)}
+              aria-expanded={showAdvanced}
+              title={
+                advancedActive
+                  ? tr('moreFiltersActive', { n: advancedActive })
+                  : tr('moreFilters')
+              }
+            >
+              {advancedActive ? (
+                <span className="toolbar-more-count">{advancedActive}</span>
+              ) : null}
+              <MoreFiltersIcon />
+            </button>
           </div>
         </div>
 
         <div className="toolbar-actions">
-          {filtersActive && (
-            <button
-              type="button"
-              className="toolbar-clear-filters"
-              onClick={clearFilters}
-              title={tr('clearFilters')}
-              aria-label={tr('clearFilters')}
-            >
-              <ClearFiltersIcon />
-            </button>
-          )}
-          <button
-            type="button"
-            className={
-              showAdvanced || advancedActive ? 'toolbar-more active' : 'toolbar-more'
-            }
-            onClick={() => setShowAdvanced((v) => !v)}
-            aria-expanded={showAdvanced}
-            title={
-              advancedActive
-                ? tr('moreFiltersActive', { n: advancedActive })
-                : tr('moreFilters')
-            }
-          >
-            {advancedActive ? (
-              <span className="toolbar-more-count">{advancedActive}</span>
-            ) : null}
-            <MoreFiltersIcon />
-          </button>
           {onOpenTrace && (
             <div className="toolbar-trace-launch">
               <span>{tr('traceBy')}</span>
