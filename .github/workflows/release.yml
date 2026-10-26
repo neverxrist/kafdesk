@@ -213,9 +213,12 @@ jobs:
             Tauri 2 desktop client (Electron removed).
 
             ### Highlights
-            - Dual AND search (max 2) + **Hits** (Value-only JSON field trim)
-            - Batch export of the visible filtered window (JSON / CSV)
-            - Live Tail play/stop in panel; Consume group-by-partitions
+            - Group snapshot: lag by topic, trend and stalled groups, sidebar lag badges
+            - One batched watermark request for the topic list
+            - Live Tail flushes in batches and shows how many messages it skipped
+            - Messages over 256 KB show a preview with “Load full”
+            - Message headers stay collapsed until opened
+            - Extra consumer groups stay behind a +N menu
 
             ### Downloads
             - **macOS Apple Silicon** — `*-mac-arm64.dmg`

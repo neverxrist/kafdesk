@@ -285,8 +285,11 @@ export default function MessageInspectorDock({
               </div>
             )}
             {headers.length > 0 && (
-              <div className="msg-headers" aria-label={tr('msgHeaders')}>
-                <span className="msg-headers-label">{tr('msgHeaders')}</span>
+              <details className="msg-headers">
+                <summary className="msg-headers-label">
+                  {tr('msgHeaders')}
+                  <span className="msg-headers-count">{headers.length}</span>
+                </summary>
                 <dl className="msg-headers-list">
                   {headers.map(([k, v]) => (
                     <div key={k} className="msg-header-row">
@@ -295,7 +298,7 @@ export default function MessageInspectorDock({
                     </div>
                   ))}
                 </dl>
-              </div>
+              </details>
             )}
             {active.truncatedBytes ? (
               <TruncatedValueNotice

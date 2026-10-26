@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "kafdesk"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "apache-avro",
  "base64 0.22.1",

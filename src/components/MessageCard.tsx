@@ -240,8 +240,11 @@ export default function MessageCard({
 
   const headersBlock =
     headerEntries.length > 0 ? (
-      <div className="msg-headers" aria-label={labels?.headers ?? 'Headers'}>
-        <span className="msg-headers-label">{labels?.headers ?? 'Headers'}</span>
+      <details className="msg-headers">
+        <summary className="msg-headers-label">
+          {labels?.headers ?? 'Headers'}
+          <span className="msg-headers-count">{headerEntries.length}</span>
+        </summary>
         <dl className="msg-headers-list">
           {headerEntries.map(([k, v]) => (
             <div key={k} className="msg-header-row">
@@ -250,7 +253,7 @@ export default function MessageCard({
             </div>
           ))}
         </dl>
-      </div>
+      </details>
     ) : null
 
   const metaRight = (

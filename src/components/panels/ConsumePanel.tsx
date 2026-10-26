@@ -475,6 +475,8 @@ export default function ConsumePanel({
     () => loadBatchTimeSort() ?? (startFrom === 'end' ? 'newest' : 'oldest'),
   )
   const [dockOpen, setDockOpen] = useState(false)
+  const [consumersOpen, setConsumersOpen] = useState(false)
+  const consumersRef = useRef<HTMLDivElement>(null)
   const [inspectId, setInspectId] = useState<string | null>(null)
   const [dockShowDiff, setDockShowDiff] = useState(() => {
     try {
@@ -535,7 +537,32 @@ export default function ConsumePanel({
     setHiddenPartitions(new Set())
     setDockOpen(false)
     setInspectId(null)
+    setConsumersOpen(false)
   }, [selectedTopic])
+
+  const consumerChips = useMemo(() => {
+    if (!topicGroupLags) return null
+    const sorted = [...topicGroupLags].sort(
+      (a, b) => b.totalLag - a.totalLag || a.groupId.localeCompare(b.groupId),
+    )
+    return { shown: sorted.slice(0, 2), rest: sorted.slice(2) }
+  }, [topicGroupLags])
+
+  useEffect(() => {
+    if (!consumersOpen) return
+    function onPointer(e: PointerEvent) {
+      if (!consumersRef.current?.contains(e.target as Node)) setConsumersOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setConsumersOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointer)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [consumersOpen])
 
   // When Seek/Batch direction changes, reset list order to match (flip still local).
   const prevStartFrom = useRef(startFrom)
@@ -703,18 +730,55 @@ export default function ConsumePanel({
                     {topicGroupLags == null ? (
                       <span className="topic-lag-empty">{tr('topicLagLoading')}</span>
                     ) : (
-                      topicGroupLags.map((g) => (
-                        <button
-                          key={g.groupId}
-                          type="button"
-                          className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
-                          title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
-                          onClick={() => onOpenConsumerGroup?.(g.groupId)}
-                        >
-                          <em>{g.groupId}</em>
-                          <strong>{g.totalLag}</strong>
-                        </button>
-                      ))
+                      <>
+                        {consumerChips?.shown.map((g) => (
+                          <button
+                            key={g.groupId}
+                            type="button"
+                            className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
+                            title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
+                            onClick={() => onOpenConsumerGroup?.(g.groupId)}
+                          >
+                            <em>{g.groupId}</em>
+                            <strong>{g.totalLag}</strong>
+                          </button>
+                        ))}
+                        {consumerChips && consumerChips.rest.length > 0 && (
+                          <div className="topic-lag-more-wrap" ref={consumersRef}>
+                            <button
+                              type="button"
+                              className={`topic-lag-chip topic-lag-more${
+                                consumerChips.rest.some((g) => g.totalLag > 0) ? ' behind' : ''
+                              }`}
+                              aria-expanded={consumersOpen}
+                              title={tr('topicConsumersMoreTitle', { n: consumerChips.rest.length })}
+                              onClick={() => setConsumersOpen((v) => !v)}
+                            >
+                              {tr('topicConsumersMore', { n: consumerChips.rest.length })}
+                            </button>
+                            {consumersOpen && (
+                              <div className="topic-lag-more-menu" role="menu">
+                                {consumerChips.rest.map((g) => (
+                                  <button
+                                    key={g.groupId}
+                                    type="button"
+                                    role="menuitem"
+                                    className={`topic-lag-chip${g.totalLag > 0 ? ' behind' : ''}`}
+                                    title={`${g.groupId}: lag ${g.totalLag} · ${tr('topicConsumerOpen')}`}
+                                    onClick={() => {
+                                      setConsumersOpen(false)
+                                      onOpenConsumerGroup?.(g.groupId)
+                                    }}
+                                  >
+                                    <em>{g.groupId}</em>
+                                    <strong>{g.totalLag}</strong>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
