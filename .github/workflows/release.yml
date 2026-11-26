@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 # Tauri 2 + rdkafka (cmake). Builds macOS arm64, Windows, Linux.
-# No macOS Intel (macos-13 runners are scarce / often stuck in queue).
+# macos-14 retired 2026-11-02 — use macos-15 (arm64). No Intel macOS builds.
 
 jobs:
   build:
@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-14
+          - platform: macos-15
             rust_target: aarch64-apple-darwin
             artifact_name: mac-arm64
             bundles: dmg,app
@@ -210,15 +210,14 @@ jobs:
           body: |
             ## KafDesk ${{ github.ref_name }}
 
-            Tauri 2 desktop client (Electron removed).
+            Tauri 2 desktop Kafka client.
 
             ### Highlights
+            - **Trace** an id across a saved topic set (key and message body, including Avro)
+            - Consume **from end** opens on the newest messages; Refresh reads past the end from when you opened the topic
             - Group snapshot: lag by topic, trend and stalled groups, sidebar lag badges
-            - One batched watermark request for the topic list
             - Live Tail flushes in batches and shows how many messages it skipped
             - Messages over 256 KB show a preview with “Load full”
-            - Message headers stay collapsed until opened
-            - Extra consumer groups stay behind a +N menu
 
             ### Downloads
             - **macOS Apple Silicon** — `*-mac-arm64.dmg`
