@@ -1358,7 +1358,9 @@ export function useKafdeskApp(pushLog: (level: AppLogEntry['level'], msg: string
         tailingRef.current = false
         setTailing(false)
       }
-      const details = offsetsFrom ?? topicDetails
+      // Only watermarks fetched for this very load: `topicDetails` is from topic open,
+      // and its high stops Refresh / Seek before anything produced since.
+      const details = offsetsFrom
       const partitionWatermarks =
         details?.name === topic
           ? details.partitions

@@ -525,8 +525,8 @@ export default function ConsumePanel({
   const [hiddenPartitions, setHiddenPartitions] = useState<Set<number>>(() => new Set())
   const [viewMode, setViewMode] = useState<MessageViewMode>(() => loadMessageViewMode())
   const [groupByPartitions, setGroupByPartitions] = useState(() => loadGroupByPartitions())
-  const [timeSort, setTimeSort] = useState<BatchTimeSort>(
-    () => loadBatchTimeSort() ?? (startFrom === 'end' ? 'newest' : 'oldest'),
+  const [timeSort, setTimeSort] = useState<BatchTimeSort>(() =>
+    startFrom === 'end' ? 'newest' : (loadBatchTimeSort() ?? 'oldest'),
   )
   const [dockOpen, setDockOpen] = useState(false)
   const [consumersOpen, setConsumersOpen] = useState(false)
@@ -542,6 +542,7 @@ export default function ConsumePanel({
     }
   })
   const newestFirst = timeSort === 'newest'
+  const listRef = useRef<HTMLElement>(null)
 
   function setView(mode: MessageViewMode) {
     setViewMode(mode)
@@ -644,6 +645,25 @@ export default function ConsumePanel({
     prevStartFrom.current = startFrom
     setBatchSort(startFrom === 'end' ? 'newest' : 'oldest')
   }, [startFrom])
+
+  // From-end broker loads open on the tail. A saved oldest-first order left yesterday on top.
+  // Keyed on the load finishing, not on `messages`: typing a filter must not reset the clock.
+  const wasBusy = useRef(busy)
+  useEffect(() => {
+    const finished = wasBusy.current && !busy
+    wasBusy.current = busy
+    if (!finished || startFrom !== 'end') return
+    setTimeSort('newest')
+    const frame = requestAnimationFrame(() => {
+      const root = listRef.current
+      if (!root) return
+      root.scrollTop = 0
+      root.querySelectorAll<HTMLElement>('.messages-scroll, .messages-virt').forEach((el) => {
+        el.scrollTop = 0
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [busy, startFrom])
 
   useEffect(() => {
     if (!inspectId) return
@@ -781,7 +801,7 @@ export default function ConsumePanel({
   }
 
   return (
-    <section className={`messages${dockOpen ? ' messages-with-dock' : ''}`}>
+    <section ref={listRef} className={`messages${dockOpen ? ' messages-with-dock' : ''}`}>
       {!traceView && topicDetails && (
         <div className="panel messages-topic-panel">
           <div className="messages-panel-head">
